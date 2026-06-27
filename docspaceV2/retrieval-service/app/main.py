@@ -1,0 +1,477 @@
+import hashlib
+import json
+import math
+import random
+import uuid
+from typing import Any, Dict, List
+
+import httpx
+import psycopg
+from fastapi import FastAPI, HTTPException, Query
+
+from .config import settings
+from .models import RetrievalRequest, RetrievalResponse, RetrievalResult
+
+app = FastAPI(title="DocSpace Retrieval Service", version="0.1.0")
+
+
+@app.get("/api/retrieval/health")
+def health() -> Dict[str, str]:
+    return {"status": "UP"}
+
+
+@app.post("/api/retrieval/search", response_model=RetrievalResponse)
+def search(request: RetrievalRequest) -> RetrievalResponse:
+    return _search(request, include_debug=False)
+
+
+@app.post("/api/retrieval/debug", response_model=RetrievalResponse)
+def debug(request: RetrievalRequest) -> RetrievalResponse:
+    return _search(request, include_debug=True)
+
+
+@app.post("/api/retrieval/sync/pending")
+def sync_pending(limit: int = Query(default=10, ge=1, le=100)) -> Dict[str, Any]:
+    with psycopg.connect(settings.postgres_dsn) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id
+                FROM ks_sync_job
+                WHERE status = 'pending'
+                ORDER BY created_at ASC, id ASC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            job_ids = [row[0] for row in cursor.fetchall()]
+    results = [sync_job_by_id(job_id) for job_id in job_ids]
+    return {"processed": len(results), "results": results}
+
+
+@app.post("/api/retrieval/sync/jobs/{job_id}")
+def sync_job(job_id: int) -> Dict[str, Any]:
+    return sync_job_by_id(job_id)
+
+
+def _search(request: RetrievalRequest, include_debug: bool) -> RetrievalResponse:
+    trace_id = uuid.uuid4().hex
+    query_embedding = embed_text(request.query)
+    candidates = load_candidates(request, query_embedding, request.policy.topK * 3)
+    keyword_ranked = score_keywords(request.query, candidates)
+    reranked = rerank(request.query, keyword_ranked, request.policy.rerankTopN)
+    authorized: List[Dict[str, Any]] = []
+    permission_checks: List[Dict[str, Any]] = []
+    for item in reranked:
+        permission = check_permission(item["id"], request)
+        permission_checks.append({"chunkId": item["id"], **permission})
+        if permission.get("allowed"):
+            item["permissionMatchedBy"] = permission.get("permissionMatchedBy", "policy")
+            authorized.append(item)
+    results: List[RetrievalResult] = []
+    for item in authorized[: request.policy.rerankTopN]:
+        result = RetrievalResult(
+            chunkId=str(item["id"]),
+            content=item["chunk_text"],
+            sourceTitle=item.get("source_title") or item.get("title") or "未知来源",
+            wikiPageId=str(item["wiki_page_id"]) if item.get("wiki_page_id") is not None else None,
+            wikiPageVersion=item.get("wiki_page_version"),
+            knowledgeStatus=item["knowledge_status"],
+            score=float(item.get("score", 0.0)),
+            rerankScore=float(item.get("rerank_score", 0.0)),
+            permissionMatchedBy=item.get("permissionMatchedBy", "policy"),
+            whySelected=why_selected(item),
+        )
+        results.append(result)
+        if request.policy.requireCitation:
+            record_citation(trace_id, request, result)
+    debug_payload = None
+    if include_debug:
+        debug_payload = {
+            "candidateCount": len(candidates),
+            "rerankedCount": len(reranked),
+            "permissionChecks": permission_checks,
+            "queryEmbeddingProvider": "dashscope" if settings.dashscope_api_key else "local-hash",
+        }
+    return RetrievalResponse(results=results, traceId=trace_id, debug=debug_payload)
+
+
+def load_candidates(request: RetrievalRequest, query_embedding: List[float], limit: int) -> List[Dict[str, Any]]:
+    vector = "[" + ",".join(f"{value:.6f}" for value in query_embedding) + "]"
+    filters = ["c.knowledge_status = 'active'"]
+    params: List[Any] = [vector]
+    if request.actor.departmentId:
+        filters.append("(c.department_tags IS NULL OR c.department_tags = '' OR c.department_tags LIKE %s)")
+        params.append(f"%{request.actor.departmentId}%")
+    if request.actor.positionCode:
+        filters.append("(c.position_tags IS NULL OR c.position_tags = '' OR c.position_tags LIKE %s)")
+        params.append(f"%{request.actor.positionCode}%")
+    params.append(limit)
+    sql = f"""
+        SELECT c.id, c.chunk_text, c.chunk_summary, c.wiki_page_id, c.wiki_page_version,
+               c.knowledge_status, c.metadata_json, c.department_tags, c.position_tags,
+               p.title, 1 - (c.embedding <=> %s::vector) AS score
+        FROM ks_chunk c
+        LEFT JOIN ks_wiki_page p ON p.id = c.wiki_page_id
+        WHERE {' AND '.join(filters)}
+        ORDER BY c.embedding <=> %s::vector
+        LIMIT %s
+    """
+    # vector is used twice, once for score and once for ORDER BY
+    db_params = [params[0]] + params[1:-1] + [params[0], params[-1]]
+    with psycopg.connect(settings.postgres_dsn) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, db_params)
+            columns = [column.name for column in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
+def sync_job_by_id(job_id: int) -> Dict[str, Any]:
+    try:
+        with psycopg.connect(settings.postgres_dsn) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM ks_sync_job WHERE id = %s FOR UPDATE", (job_id,))
+                job = row_to_dict(cursor)
+                if not job:
+                    raise HTTPException(status_code=404, detail="Sync job not found")
+                if job["status"] == "completed":
+                    return {"jobId": job_id, "status": "completed", "chunkCount": 0, "skipped": True}
+                cursor.execute(
+                    """
+                    UPDATE ks_sync_job
+                    SET status = 'running',
+                        attempt_count = attempt_count + 1,
+                        started_at = CURRENT_TIMESTAMP,
+                        updated_at = CURRENT_TIMESTAMP,
+                        error_message = NULL
+                    WHERE id = %s
+                    """,
+                    (job_id,),
+                )
+                result = sync_wiki_page(cursor, job)
+                cursor.execute(
+                    """
+                    UPDATE ks_sync_job
+                    SET status = 'completed',
+                        finished_at = CURRENT_TIMESTAMP,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s
+                    """,
+                    (job_id,),
+                )
+            conn.commit()
+            return {"jobId": job_id, "status": "completed", **result}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        mark_sync_failed(job_id, str(exc))
+        return {"jobId": job_id, "status": "failed", "error": str(exc)}
+
+
+def sync_wiki_page(cursor: Any, job: Dict[str, Any]) -> Dict[str, Any]:
+    if job.get("source_type") != "wiki_page":
+        raise ValueError(f"Unsupported sync source type: {job.get('source_type')}")
+    cursor.execute(
+        """
+        SELECT id, title, summary, content, current_version, metadata_json, tags_json,
+               owner_id, department_id, acl_policy_id, status
+        FROM ks_wiki_page
+        WHERE id = %s AND deleted = 0
+        """,
+        (job["source_id"],),
+    )
+    page = row_to_dict(cursor)
+    if not page:
+        raise ValueError(f"Wiki page {job['source_id']} not found")
+    if page.get("status") != "active":
+        raise ValueError(f"Wiki page {job['source_id']} is not active")
+
+    source_version = int(job.get("source_version") or page.get("current_version") or 1)
+    chunks = build_chunks(page)
+    cursor.execute(
+        """
+        UPDATE ks_chunk
+        SET knowledge_status = 'deprecated', updated_at = CURRENT_TIMESTAMP
+        WHERE source_type = 'wiki_page' AND source_id = %s AND source_version = %s
+        """,
+        (page["id"], source_version),
+    )
+
+    position_tags = normalize_tag_list(parse_json(page.get("tags_json")).get("positions"))
+    department_tags = str(page["department_id"]) if page.get("department_id") is not None else ""
+    embedding_model = settings.dashscope_embedding_model
+    embedding_version = "dashscope" if settings.dashscope_api_key else "local-hash-v1"
+    index_version = int(job["id"])
+    inserted_ids: List[int] = []
+    for index, chunk_text in enumerate(chunks, start=1):
+        embedding = vector_literal(embed_text(chunk_text))
+        metadata = {
+            "sourceTitle": page.get("title"),
+            "chunkOrdinal": index,
+            "syncJobId": job["id"],
+        }
+        cursor.execute(
+            """
+            INSERT INTO ks_chunk(source_type, source_id, source_version, wiki_page_id, wiki_page_version,
+                content_hash, chunk_text, chunk_summary, metadata_json, acl_policy_id, acl_version,
+                security_level, position_tags, department_tags, project_tags, knowledge_status,
+                embedding_model, embedding_version, embedding, index_version)
+            VALUES ('wiki_page', %s, %s, %s, %s, %s, %s, %s, %s, %s, 1,
+                'internal', %s, %s, '', 'active', %s, %s, %s::vector, %s)
+            RETURNING id
+            """,
+            (
+                page["id"],
+                source_version,
+                page["id"],
+                source_version,
+                sha256(chunk_text),
+                chunk_text,
+                summarize_chunk(chunk_text),
+                json.dumps(metadata, ensure_ascii=False),
+                page.get("acl_policy_id"),
+                position_tags,
+                department_tags,
+                embedding_model,
+                embedding_version,
+                embedding,
+                index_version,
+            ),
+        )
+        inserted_ids.append(cursor.fetchone()[0])
+
+    content_hash = sha256("\n\n".join(chunks))
+    cursor.execute(
+        """
+        INSERT INTO ks_index_record(source_type, source_id, source_version, wiki_page_id, wiki_page_version,
+            content_hash, chunk_strategy_version, chunk_count, embedding_model, embedding_version,
+            index_version, index_status, indexed_at)
+        VALUES ('wiki_page', %s, %s, %s, %s, %s, 'paragraph-v1', %s, %s, %s, %s, 'completed', CURRENT_TIMESTAMP)
+        """,
+        (
+            page["id"],
+            source_version,
+            page["id"],
+            source_version,
+            content_hash,
+            len(chunks),
+            embedding_model,
+            embedding_version,
+            index_version,
+        ),
+    )
+    cursor.execute(
+        """
+        UPDATE ks_wiki_page
+        SET sync_status = 'indexed', updated_at = CURRENT_TIMESTAMP
+        WHERE id = %s
+        """,
+        (page["id"],),
+    )
+    return {"sourceType": "wiki_page", "sourceId": page["id"], "chunkCount": len(inserted_ids), "chunkIds": inserted_ids}
+
+
+def mark_sync_failed(job_id: int, error: str) -> None:
+    with psycopg.connect(settings.postgres_dsn) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE ks_sync_job
+                SET status = 'failed',
+                    error_message = %s,
+                    finished_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+                """,
+                (error[:2000], job_id),
+            )
+        conn.commit()
+
+
+def score_keywords(query: str, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    terms = [term.lower() for term in query.split() if term.strip()]
+    for item in candidates:
+        text = (item.get("chunk_text") or "").lower()
+        title = (item.get("title") or "").lower()
+        keyword_hits = sum(1 for term in terms if term in text or term in title)
+        item["score"] = float(item.get("score") or 0.0) + keyword_hits * 0.05
+    return sorted(candidates, key=lambda item: item.get("score", 0.0), reverse=True)
+
+
+def embed_text(text: str) -> List[float]:
+    if settings.dashscope_api_key:
+        try:
+            with httpx.Client(timeout=20) as client:
+                response = client.post(
+                    f"{settings.dashscope_base_url.rstrip('/')}/embeddings",
+                    headers={"Authorization": f"Bearer {settings.dashscope_api_key}"},
+                    json={
+                        "model": settings.dashscope_embedding_model,
+                        "input": text,
+                        "dimensions": settings.dashscope_embedding_dimensions,
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+                embedding = data["data"][0]["embedding"]
+                if len(embedding) == settings.dashscope_embedding_dimensions:
+                    return [float(value) for value in embedding]
+        except Exception:
+            pass
+    return local_embedding(text, settings.dashscope_embedding_dimensions)
+
+
+def local_embedding(text: str, dimensions: int) -> List[float]:
+    seed = int(hashlib.sha256(text.encode("utf-8")).hexdigest()[:16], 16)
+    random.seed(seed)
+    values = [(random.random() - 0.5) / 10 for _ in range(dimensions)]
+    norm = math.sqrt(sum(value * value for value in values)) or 1.0
+    return [value / norm for value in values]
+
+
+def vector_literal(values: List[float]) -> str:
+    return "[" + ",".join(f"{value:.6f}" for value in values) + "]"
+
+
+def build_chunks(page: Dict[str, Any], max_chars: int = 1200) -> List[str]:
+    content = "\n\n".join(
+        value.strip()
+        for value in [page.get("title") or "", page.get("summary") or "", page.get("content") or ""]
+        if value and value.strip()
+    )
+    paragraphs = [item.strip() for item in content.replace("\r\n", "\n").split("\n\n") if item.strip()]
+    chunks: List[str] = []
+    current = ""
+    for paragraph in paragraphs:
+        if len(paragraph) > max_chars:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.extend(paragraph[index : index + max_chars] for index in range(0, len(paragraph), max_chars))
+            continue
+        candidate = paragraph if not current else current + "\n\n" + paragraph
+        if len(candidate) <= max_chars:
+            current = candidate
+        else:
+            chunks.append(current)
+            current = paragraph
+    if current:
+        chunks.append(current)
+    return chunks or [page.get("title") or f"wiki_page:{page.get('id')}"]
+
+
+def summarize_chunk(text: str) -> str:
+    safe = " ".join((text or "").split())
+    return safe[:240]
+
+
+def rerank(query: str, candidates: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+    if settings.dashscope_api_key and candidates:
+        try:
+            documents = [item["chunk_text"] for item in candidates[:limit]]
+            with httpx.Client(timeout=20) as client:
+                response = client.post(
+                    settings.dashscope_rerank_endpoint,
+                    headers={"Authorization": f"Bearer {settings.dashscope_api_key}"},
+                    json={"model": settings.dashscope_rerank_model, "query": query, "documents": documents, "top_n": limit},
+                )
+                response.raise_for_status()
+                data = response.json()
+                ranked: List[Dict[str, Any]] = []
+                for result in data.get("results", []):
+                    index = result.get("index")
+                    if index is not None and index < len(candidates):
+                        item = dict(candidates[index])
+                        item["rerank_score"] = float(result.get("relevance_score", item.get("score", 0.0)))
+                        ranked.append(item)
+                if ranked:
+                    return ranked
+        except Exception:
+            pass
+    ranked = candidates[:limit]
+    for index, item in enumerate(ranked):
+        item["rerank_score"] = float(item.get("score", 0.0)) - index * 0.001
+    return ranked
+
+
+def check_permission(chunk_id: Any, request: RetrievalRequest) -> Dict[str, Any]:
+    try:
+        with httpx.Client(timeout=10) as client:
+            response = client.post(
+                f"{settings.docspace_server_base_url.rstrip('/')}/api/internal/knowledge/chunks/{chunk_id}/permission-check",
+                headers={"X-Service-Token": settings.service_token},
+                json={
+                    "actorType": request.actor.type,
+                    "actorId": request.actor.id,
+                    "departmentId": request.actor.departmentId,
+                    "positionCode": request.actor.positionCode,
+                    "action": "use_in_rag",
+                },
+            )
+            response.raise_for_status()
+            return response.json().get("data") or {"allowed": False}
+    except Exception:
+        return {"allowed": False, "permissionMatchedBy": "permission_error"}
+
+
+def record_citation(trace_id: str, request: RetrievalRequest, result: RetrievalResult) -> None:
+    try:
+        with httpx.Client(timeout=5) as client:
+            client.post(
+                f"{settings.docspace_server_base_url.rstrip('/')}/api/internal/knowledge/citations",
+                headers={"X-Service-Token": settings.service_token},
+                json={
+                    "traceId": trace_id,
+                    "actorType": request.actor.type,
+                    "actorId": request.actor.id,
+                    "queryText": request.query,
+                    "chunkId": result.chunkId,
+                    "wikiPageId": result.wikiPageId,
+                    "wikiPageVersion": result.wikiPageVersion,
+                    "score": result.score,
+                    "rerankScore": result.rerankScore,
+                    "permissionMatchedBy": result.permissionMatchedBy,
+                    "taskType": request.task.type,
+                },
+            )
+    except Exception:
+        pass
+
+
+def row_to_dict(cursor: Any) -> Dict[str, Any]:
+    row = cursor.fetchone()
+    if not row:
+        return {}
+    columns = [column.name for column in cursor.description]
+    return dict(zip(columns, row))
+
+
+def parse_json(value: Any) -> Dict[str, Any]:
+    if not value:
+        return {}
+    if isinstance(value, dict):
+        return value
+    try:
+        return json.loads(value)
+    except Exception:
+        return {}
+
+
+def normalize_tag_list(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return ",".join(str(item) for item in value if str(item).strip())
+    return str(value)
+
+
+def sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def why_selected(item: Dict[str, Any]) -> str:
+    return (
+        f"语义分 {float(item.get('score', 0.0)):.3f}，"
+        f"重排分 {float(item.get('rerank_score', 0.0)):.3f}，"
+        f"权限命中 {item.get('permissionMatchedBy', 'policy')}。"
+    )

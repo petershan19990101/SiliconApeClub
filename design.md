@@ -1,12 +1,12 @@
 # Design Log
 
-> 本文件用于持续沉淀“硅基猿候俱乐部 / DocSpace Knowledge Layer”的设计决策、产品方案、技术架构和实施记录。后续新讨论继续按日期追加。
+> 本文件用于持续沉淀“硅基猿猴俱乐部 / DocSpace Knowledge Layer”的设计决策、产品方案、技术架构和实施记录。后续新讨论继续按日期追加。
 
 ## 2026-06-20
 
 ### 1. 项目定位
 
-硅基猿候俱乐部的核心目标不是搭建一个大而空的多 Agent 聊天室，而是嵌入公司现有组织，以岗位为单位逐步替换或增强人力组织能力。
+硅基猿猴俱乐部的核心目标不是搭建一个大而空的多 Agent 聊天室，而是嵌入公司现有组织，以岗位为单位逐步替换或增强人力组织能力。
 
 DocSpace Knowledge Layer 被定位为企业知识层与 AI 员工核心记忆层：
 
@@ -26,7 +26,7 @@ RAG 是 AI 员工调用知识的派生索引。
 
 产品 PRD 已输出到：
 
-- [PRD.md](C:/Users/16952/Documents/x-worker/PRD.md)
+- [PRD.md](D:/work/SiliconApeClub/PRD.md)
 
 核心范围：
 
@@ -55,7 +55,7 @@ RAG 是 AI 员工调用知识的派生索引。
 
 系统架构设计已输出到：
 
-- [ARCHITECTURE.md](C:/Users/16952/Documents/x-worker/ARCHITECTURE.md)
+- [ARCHITECTURE.md](D:/work/SiliconApeClub/ARCHITECTURE.md)
 
 核心架构：
 
@@ -239,3 +239,133 @@ POST   /api/knowledge-health/maintenance-window/end
 - 增加知识图谱能力。
 - 增加企业系统连接器。
 - 增加多 Agent 任务执行层。
+
+## 2026-06-26
+
+### 1. 设计重心调整
+
+回顾 PRD、架构文档和设计日志后，确认当前知识层规划还需要补齐 AI 员工运行时使用知识的方式。
+
+新的设计结论是：DocSpace Knowledge Layer 不能只提供人类后台管理能力，也不能只提供 RAG 检索能力。它必须提供面向 AI 员工的 `Knowledge Runtime API`，作为 AI 员工调用 Wiki、RAG、岗位知识包、任务记忆和知识沉淀的统一入口。
+
+### 2. AI 员工调用知识的原则
+
+AI 员工使用知识时分为两类能力：
+
+- Wiki：权威知识源，提供结构化、可读、可维护的知识上下文。
+- RAG：派生检索索引，提供任务执行时的召回、rerank、权限过滤和引用能力。
+
+AI 员工不能直接读数据库，也不应直接耦合后台管理接口。运行时链路应为：
+
+```text
+AI 员工发起任务
+  ↓
+Knowledge Runtime API 加载运行时上下文
+  ↓
+加载 AI 身份、岗位知识包、must-read Wiki、默认检索 scope、权限边界
+  ↓
+读取必要 Wiki 结构化摘要
+  ↓
+调用 RAG 检索
+  ↓
+返回可引用 chunk、Wiki 页面、页面版本、索引版本、权限命中原因
+  ↓
+AI 生成输出
+  ↓
+写入 citation log、usage event、task memory
+```
+
+### 3. AI 员工反向沉淀 Wiki
+
+AI 员工可以贡献知识，但不能直接污染正式知识源。沉淀链路应为：
+
+```text
+AI 员工完成任务
+  ↓
+生成 task memory
+  ↓
+识别可复用知识或缺失规则
+  ↓
+提交 Wiki proposal / knowledge draft
+  ↓
+携带来源任务、证据、引用、适用岗位、风险等级
+  ↓
+知识负责人或知识管理员审核
+  ↓
+发布为 active Wiki 新版本
+  ↓
+触发知识流水线
+  ↓
+生成 chunk、embedding、index record、同步账本
+  ↓
+进入 RAG Memory
+```
+
+关键约束：
+
+- AI 员工不能直接发布 active Wiki。
+- AI 沉淀内容必须先进入草稿或 proposal。
+- 高风险知识必须人工复核。
+- 未发布 proposal 不能进入正式 RAG。
+- 发布后的 Wiki 新版本必须通过同步账本进入 RAG Memory。
+
+### 4. 新增产品与架构对象
+
+PRD 已补充：
+
+- `Knowledge Runtime API`
+- `Task Memory`
+- `Wiki Proposal`
+- AI 员工调用流程
+- AI 员工反向沉淀 Wiki 流程
+- AI 员工知识运行时视图
+- task memory / proposal 相关数据模型
+
+架构文档已补充：
+
+- `knowledge-runtime-service`
+- `task-memory-service`
+- Knowledge Runtime API 契约
+- AI 员工检索链路
+- AI 员工知识沉淀链路
+- 运行时与沉淀元数据
+- 实施路线中提前纳入 Runtime API、task memory 和 Wiki proposal
+
+### 5. 建议预留接口
+
+```http
+GET  /api/ai-employees/{id}/runtime-context
+GET  /api/position-packages/{id}/runtime-profile
+GET  /api/wiki/pages/{id}/ai-readable
+
+POST /api/retrieval/search
+POST /api/retrieval/debug
+POST /api/knowledge/citations
+POST /api/task-memories
+
+POST /api/knowledge/feedback
+POST /api/wiki/proposals
+GET  /api/wiki/proposals/{id}
+POST /api/wiki/proposals/{id}/approve
+POST /api/wiki/proposals/{id}/reject
+POST /api/task-memories/{id}/promote-to-wiki
+POST /api/knowledge/sync-jobs
+GET  /api/knowledge/sync-jobs/{id}
+```
+
+### 6. 当前结论
+
+知识层后续开发必须同时服务两类用户：
+
+- 人类用户：管理、审核、治理、巡检知识。
+- AI 员工：加载上下文、检索知识、引用知识、反馈知识、沉淀草稿。
+
+因此，知识层的真实边界应从“DocSpace + Wiki + RAG”扩展为：
+
+```text
+DocSpace 管理层
+  + LLM Wiki 知识源
+  + RAG Memory 检索层
+  + Knowledge Runtime API
+  + Task Memory / Wiki Proposal 沉淀层
+```

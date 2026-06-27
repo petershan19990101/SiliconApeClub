@@ -1,2 +1,20 @@
 # docspaceV2 is managed by its own Git repository.
-/docspaceV2/
+
+
+# Local verification/runtime artifacts.
+/.venv/
+/logs/
+**/__pycache__/
+*.pyc
+/target/
+docspace-server/logs/
+/.mvn/wrapper/maven-wrapper.jar
+*.log
+*.iml
+/.idea/
+/.vscode/
+/.DS_Store
+.env
+
+**/__pycache__/
+*.pyc

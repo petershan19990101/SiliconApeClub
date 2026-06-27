@@ -1,0 +1,5 @@
+{
+  "name": "DocSpace - 企业文档管理系统",
+  "description": "企业级智能文档管理与 RAG 知识库前端，支持上传、解析、校正、审核发布、修订草稿与权限控制。",
+  "requestFramePermissions": []
+}

@@ -1,0 +1,10 @@
+Spec-driven development (SDD) ...
+pdfJS-dist
+
+https://www.npmjs.com/package/pdfjs-dist
+
+docx  doc不太好渲染  可以只支持docx
+pptx  ppt不太好渲染  可以只支持pptx
+
+图片  视频  直接用html标签
+markdown  react-markdown

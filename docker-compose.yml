@@ -1,0 +1,186 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: sac-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: docspace
+      POSTGRES_USER: docspace
+      POSTGRES_PASSWORD: docspace123
+    ports:
+      - "15432:5432"
+    volumes:
+      - sac-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docspace -d docspace"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: sac-redis
+    restart: unless-stopped
+    ports:
+      - "16379:6379"
+    volumes:
+      - sac-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rocketmq-namesrv:
+    image: apache/rocketmq:4.9.7
+    container_name: sac-rocketmq-namesrv
+    restart: unless-stopped
+    ports:
+      - "19876:9876"
+    command: sh mqnamesrv
+
+  rocketmq-broker:
+    image: apache/rocketmq:4.9.7
+    container_name: sac-rocketmq-broker
+    restart: unless-stopped
+    depends_on:
+      - rocketmq-namesrv
+    environment:
+      NAMESRV_ADDR: rocketmq-namesrv:9876
+    ports:
+      - "10909:10909"
+      - "10911:10911"
+      - "10912:10912"
+    command: sh mqbroker -n rocketmq-namesrv:9876
+
+  minio:
+    image: minio/minio:RELEASE.2025-02-28T09-55-16Z
+    container_name: sac-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "19000:9000"
+      - "19001:9001"
+    volumes:
+      - sac-minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  docspace-server:
+    profiles: ["app"]
+    image: siliconapeclub-docspace-server:${DOCSPACE_SERVER_IMAGE_TAG:-latest}
+    build:
+      context: ./docspaceV2/docspace-server
+      args:
+        MAVEN_BASE_IMAGE: ${MAVEN_BASE_IMAGE:-maven:3.9.9-eclipse-temurin-8}
+        JRE_BASE_IMAGE: ${JRE_BASE_IMAGE:-eclipse-temurin:8-jre}
+    container_name: sac-docspace-server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rocketmq-namesrv:
+        condition: service_started
+      rocketmq-broker:
+        condition: service_started
+      minio:
+        condition: service_started
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: docspace
+      POSTGRES_USERNAME: docspace
+      POSTGRES_PASSWORD: docspace123
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      ROCKETMQ_NAME_SERVER: rocketmq-namesrv:9876
+      MINIO_ENDPOINT: http://minio:9000
+      RETRIEVAL_BASE_URL: http://retrieval-service:8090
+      RETRIEVAL_SERVICE_TOKEN: docspace-retrieval-dev-token
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+    ports:
+      - "8080:8080"
+
+  retrieval-service:
+    profiles: ["app"]
+    image: siliconapeclub-retrieval-service:${RETRIEVAL_SERVICE_IMAGE_TAG:-latest}
+    build:
+      context: ./docspaceV2/retrieval-service
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.11-slim}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}
+    container_name: sac-retrieval-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      docspace-server:
+        condition: service_started
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: docspace
+      POSTGRES_USERNAME: docspace
+      POSTGRES_PASSWORD: docspace123
+      DOCSPACE_SERVER_BASE_URL: http://docspace-server:8080
+      RETRIEVAL_SERVICE_TOKEN: docspace-retrieval-dev-token
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+    ports:
+      - "8090:8090"
+
+  knowledge-runtime-service:
+    profiles: ["app"]
+    image: siliconapeclub-knowledge-runtime-service:${KNOWLEDGE_RUNTIME_SERVICE_IMAGE_TAG:-latest}
+    build:
+      context: ./knowledge-runtime-service
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.11-slim}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}
+    container_name: sac-knowledge-runtime-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: docspace
+      POSTGRES_USERNAME: docspace
+      POSTGRES_PASSWORD: docspace123
+    ports:
+      - "8091:8091"
+
+  task-memory-service:
+    profiles: ["app"]
+    image: siliconapeclub-task-memory-service:${TASK_MEMORY_SERVICE_IMAGE_TAG:-latest}
+    build:
+      context: ./task-memory-service
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.11-slim}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}
+    container_name: sac-task-memory-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: docspace
+      POSTGRES_USERNAME: docspace
+      POSTGRES_PASSWORD: docspace123
+    ports:
+      - "8092:8092"
+
+volumes:
+  sac-postgres-data:
+  sac-redis-data:
+  sac-minio-data:

@@ -1,0 +1,4 @@
+/**
+ * setup 相关文件，用于承载对应模块的实现。
+ */
+import '@testing-library/jest-dom/vitest';

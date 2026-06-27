@@ -1,0 +1,156 @@
+/**
+ * RAG 管理弹窗，负责查看同步历史并触发知识库重同步。
+ */
+import React, { useEffect, useState } from 'react';
+import { Database, RefreshCw, X } from 'lucide-react';
+import { motion } from 'motion/react';
+import { AuditRecord, Document, DocumentVersion } from '../types';
+import { AUDIT_ACTION_LABELS, VERSION_STATUS_LABELS } from '../constants';
+import { documentRepository } from '../services';
+import { useToast } from '../contexts/ToastContext';
+import { useUser } from '../contexts/UserContext';
+import { formatDateTime } from '../lib/format';
+import { getErrorMessage } from '../lib/errors';
+
+interface RagModalProps {
+  document: Document;
+  onClose: () => void;
+  onUpdate: (document: Document) => void;
+}
+
+export function RagModal({ document, onClose, onUpdate }: RagModalProps) {
+  const { currentUser } = useUser();
+  const { pushToast } = useToast();
+  const [versions, setVersions] = useState<DocumentVersion[]>(document.versionHistory);
+  const [audits, setAudits] = useState<AuditRecord[]>(document.auditTrail);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  useEffect(() => {
+    async function fetchHistory() {
+      const history = await documentRepository.listHistory(document.id);
+      setVersions(history.versions);
+      setAudits(history.audits);
+    }
+
+    void fetchHistory();
+  }, [document.id, document.updatedAt]);
+
+  const handleSync = async () => {
+    setIsSyncing(true);
+
+    try {
+      const updated = await documentRepository.startRagSync(document.id, { operator: currentUser });
+      const history = await documentRepository.listHistory(document.id);
+      setVersions(history.versions);
+      setAudits(history.audits);
+      onUpdate(updated);
+      pushToast({
+        tone: 'success',
+        title: 'RAG 同步完成',
+        description: '最新文本已经同步到知识库，可继续提交审核。',
+      });
+    } catch (caughtError) {
+      pushToast({
+        tone: 'error',
+        title: '同步失败',
+        description: getErrorMessage(caughtError, 'RAG 同步失败'),
+      });
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        className="flex w-full max-w-4xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
+      >
+        <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/50 px-8 py-6">
+          <div className="flex items-center gap-4">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-600 text-white shadow-lg shadow-emerald-600/20">
+              <Database size={24} />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold text-slate-900">RAG 同步管理</h2>
+              <p className="text-sm text-slate-500">{document.name}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="rounded-xl p-2 text-slate-400 transition hover:bg-slate-200">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="grid gap-0 lg:grid-cols-[1.2fr_1fr]">
+          <div className="border-r border-slate-100 p-8">
+            <div className="rounded-3xl border border-emerald-100 bg-emerald-50/70 p-6">
+              <p className="text-xs font-black uppercase tracking-wider text-emerald-700">同步状态</p>
+              <h3 className="mt-3 text-2xl font-bold text-slate-900">
+                {document.ragJob.status === 'success' ? '知识库已同步最新版本' : '知识库需要重新同步'}
+              </h3>
+              <p className="mt-2 text-sm leading-relaxed text-slate-600">
+                最近一次同步时间：{formatDateTime(document.ragJob.finishedAt ?? document.ragJob.updatedAt)}
+              </p>
+              {document.ragJob.errorMessage ? (
+                <p className="mt-3 rounded-2xl bg-white px-4 py-3 text-sm text-rose-700">{document.ragJob.errorMessage}</p>
+              ) : null}
+              <button
+                onClick={handleSync}
+                disabled={isSyncing}
+                className="mt-5 inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-emerald-600/20 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isSyncing ? <RefreshCw size={16} className="animate-spin" /> : null}
+                {isSyncing ? '同步中...' : '重新同步 RAG'}
+              </button>
+            </div>
+
+            <div className="mt-6">
+              <h3 className="mb-4 text-sm font-bold text-slate-900">版本记录</h3>
+              <div className="space-y-3">
+                {versions.map((version) => (
+                  <div key={version.version} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-bold text-slate-900">V{version.version}</p>
+                        <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                          {VERSION_STATUS_LABELS[version.status]}
+                        </span>
+                      </div>
+                    <p className="mt-1 text-xs text-slate-400">
+                      {formatDateTime(version.timestamp)} · {version.author}
+                    </p>
+                    {version.summary ? <p className="mt-2 text-xs text-slate-500">{version.summary}</p> : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="custom-scrollbar max-h-[72vh] overflow-y-auto p-8">
+            <h3 className="mb-4 text-sm font-bold text-slate-900">同步与审核留痕</h3>
+            <div className="space-y-3">
+              {audits.map((audit) => (
+                <div key={audit.id} className="rounded-2xl border border-slate-100 bg-white px-4 py-3 shadow-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-bold text-slate-900">{AUDIT_ACTION_LABELS[audit.action]}</p>
+                    <span className="text-[10px] text-slate-400">{formatDateTime(audit.createdAt)}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500">
+                    操作者：{audit.operatorName} · 版本 V{audit.version}
+                  </p>
+                  {audit.comment ? <p className="mt-2 text-xs leading-relaxed text-slate-600">{audit.comment}</p> : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-end border-t border-slate-100 bg-slate-50 px-8 py-4">
+          <button onClick={onClose} className="rounded-xl bg-white px-5 py-2.5 font-bold text-slate-600 transition hover:bg-slate-100">
+            关闭
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
