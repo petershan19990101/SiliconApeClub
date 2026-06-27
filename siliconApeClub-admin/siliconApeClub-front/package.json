@@ -1,0 +1,60 @@
+{
+  "name": "siliconapeclub-front",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": "18.20.4",
+    "npm": ">=9.0.0"
+  },
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 3000",
+    "sit": "npm run dev:sit",
+    "uat": "npm run dev:uat",
+    "sandbox": "npm run dev:sandbox",
+    "sanbox": "npm run sandbox",
+    "dev:sit": "vite --host 0.0.0.0 --port 3000 --mode sit",
+    "dev:uat": "vite --host 0.0.0.0 --port 3000 --mode uat",
+    "dev:sandbox": "vite --host 0.0.0.0 --port 3000 --mode sandbox",
+    "dev:sanbox": "vite --host 0.0.0.0 --port 3000 --mode sandbox",
+    "build": "vite build",
+    "build:sit": "vite build --mode sit",
+    "build:uat": "vite build --mode uat",
+    "build:sandbox": "vite build --mode sandbox",
+    "build:sanbox": "vite build --mode sandbox",
+    "preview": "vite preview",
+    "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
+    "typecheck": "tsc --noEmit",
+    "lint": "npm run typecheck",
+    "test": "vitest",
+    "test:run": "vitest run"
+  },
+  "dependencies": {
+    "docx-preview": "^0.3.7",
+    "jszip": "^3.10.1",
+    "lucide-react": "^0.546.0",
+    "motion": "^12.23.24",
+    "pdfjs-dist": "^5.5.207",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@testing-library/user-event": "^14.5.2",
+    "@types/node": "^18.19.130",
+    "@types/react": "^19.0.8",
+    "@types/react-dom": "^19.0.3",
+    "@vitejs/plugin-react": "^5.0.4",
+    "autoprefixer": "^10.4.27",
+    "jsdom": "^25.0.1",
+    "postcss": "^8.5.8",
+    "tailwindcss": "^3.4.17",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0",
+    "vitest": "^2.1.8"
+  }
+}

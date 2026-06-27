@@ -9,4 +9,4 @@ AI 员工任务记忆服务。
 - 标记可沉淀知识候选。
 - 将 task memory 提升为 Wiki proposal。
 
-本服务 MVP 直接连接 DocSpace PostgreSQL。
+本服务 MVP 直接连接硅基猿猴俱乐部知识层 PostgreSQL。

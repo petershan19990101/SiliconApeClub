@@ -1,1 +1,0 @@
-"""DocSpace retrieval service package."""

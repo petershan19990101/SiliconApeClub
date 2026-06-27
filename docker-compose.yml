@@ -72,15 +72,15 @@ services:
       timeout: 5s
       retries: 10
 
-  docspace-server:
+  siliconapeclub-server:
     profiles: ["app"]
-    image: siliconapeclub-docspace-server:${DOCSPACE_SERVER_IMAGE_TAG:-latest}
+    image: siliconapeclub-server:${SILICONAPECLUB_SERVER_IMAGE_TAG:-latest}
     build:
-      context: ./docspaceV2/docspace-server
+      context: ./siliconApeClub-admin/siliconApeClub-server
       args:
         MAVEN_BASE_IMAGE: ${MAVEN_BASE_IMAGE:-maven:3.9.9-eclipse-temurin-8}
         JRE_BASE_IMAGE: ${JRE_BASE_IMAGE:-eclipse-temurin:8-jre}
-    container_name: sac-docspace-server
+    container_name: sac-siliconapeclub-server
     restart: unless-stopped
     depends_on:
       postgres:
@@ -104,16 +104,33 @@ services:
       ROCKETMQ_NAME_SERVER: rocketmq-namesrv:9876
       MINIO_ENDPOINT: http://minio:9000
       RETRIEVAL_BASE_URL: http://retrieval-service:8090
-      RETRIEVAL_SERVICE_TOKEN: docspace-retrieval-dev-token
+      RETRIEVAL_SERVICE_TOKEN: siliconapeclub-retrieval-dev-token
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
     ports:
       - "8080:8080"
+
+  siliconapeclub-front:
+    profiles: ["app"]
+    image: siliconapeclub-front:${SILICONAPECLUB_FRONT_IMAGE_TAG:-latest}
+    build:
+      context: ./siliconApeClub-admin/siliconApeClub-front
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-docker.m.daocloud.io/library/python:3.11-slim}
+    container_name: sac-siliconapeclub-front
+    restart: unless-stopped
+    depends_on:
+      siliconapeclub-server:
+        condition: service_started
+      retrieval-service:
+        condition: service_started
+    ports:
+      - "3000:80"
 
   retrieval-service:
     profiles: ["app"]
     image: siliconapeclub-retrieval-service:${RETRIEVAL_SERVICE_IMAGE_TAG:-latest}
     build:
-      context: ./docspaceV2/retrieval-service
+      context: ./retrieval-service
       args:
         PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.11-slim}
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}
@@ -122,7 +139,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      docspace-server:
+      siliconapeclub-server:
         condition: service_started
     environment:
       POSTGRES_HOST: postgres
@@ -130,11 +147,36 @@ services:
       POSTGRES_DATABASE: docspace
       POSTGRES_USERNAME: docspace
       POSTGRES_PASSWORD: docspace123
-      DOCSPACE_SERVER_BASE_URL: http://docspace-server:8080
-      RETRIEVAL_SERVICE_TOKEN: docspace-retrieval-dev-token
+      SILICONAPECLUB_SERVER_BASE_URL: http://siliconapeclub-server:8080
+      RETRIEVAL_SERVICE_TOKEN: siliconapeclub-retrieval-dev-token
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
     ports:
       - "8090:8090"
+
+  knowledge-pipeline-worker:
+    profiles: ["app"]
+    image: siliconapeclub-knowledge-pipeline-worker:${KNOWLEDGE_PIPELINE_WORKER_IMAGE_TAG:-latest}
+    build:
+      context: ./knowledge-pipeline-worker
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.11-slim}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}
+    container_name: sac-knowledge-pipeline-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      retrieval-service:
+        condition: service_started
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: docspace
+      POSTGRES_USERNAME: docspace
+      POSTGRES_PASSWORD: docspace123
+      RETRIEVAL_BASE_URL: http://retrieval-service:8090
+    ports:
+      - "8093:8093"
 
   knowledge-runtime-service:
     profiles: ["app"]

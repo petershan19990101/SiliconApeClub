@@ -1,0 +1,338 @@
+import {
+  AiEmployee,
+  HealthIssue,
+  HealthReport,
+  IndexedChunk,
+  PositionKnowledgeItem,
+  PositionPackage,
+  RagAclBinding,
+  RagAclPolicy,
+  WikiPage,
+  WikiRelation,
+  WikiStructureGroup,
+} from '../types';
+import { getAuthToken } from '../lib/authStorage';
+import { parseJsonResponse } from './json';
+
+const env = import.meta.env as Record<string, string | undefined>;
+const API_BASE_URL = env.VITE_API_BASE_URL ?? 'http://localhost:8080';
+
+type ApiEnvelope<T> = {
+  success: boolean;
+  message: string;
+  data: T;
+};
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers ?? {});
+  headers.set('Accept', 'application/json');
+  const token = getAuthToken();
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  if (init?.body && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
+  const payload = await parseJsonResponse<ApiEnvelope<T>>(response);
+  if (!response.ok || !payload.success) {
+    throw new Error(payload.message || `Request failed with status ${response.status}`);
+  }
+  return payload.data;
+}
+
+function normalizeRecord<T extends Record<string, unknown>>(record: T): T {
+  return Object.fromEntries(Object.entries(record).map(([key, value]) => [key, value == null ? undefined : value])) as T;
+}
+
+function normalizePositionKnowledgeItem(item: Record<string, unknown>): PositionKnowledgeItem {
+  return {
+    id: item.id == null ? undefined : String(item.id),
+    packageId: item.packageId == null ? undefined : String(item.packageId),
+    itemType: String(item.itemType ?? 'wiki_page'),
+    itemId: String(item.itemId ?? ''),
+    required: item.required === true || item.required === 1,
+    sortOrder: Number(item.sortOrder ?? 0),
+    wikiTitle: item.wikiTitle == null ? undefined : String(item.wikiTitle),
+    wikiStatus: item.wikiStatus == null ? undefined : String(item.wikiStatus),
+  };
+}
+
+function normalizePositionPackage(item: Record<string, unknown>): PositionPackage {
+  return {
+    id: String(item.id),
+    code: String(item.code ?? ''),
+    name: String(item.name ?? ''),
+    description: item.description == null ? undefined : String(item.description),
+    positionCode: item.positionCode == null ? undefined : String(item.positionCode),
+    status: String(item.status ?? ''),
+    itemCount: item.itemCount == null ? undefined : Number(item.itemCount),
+    items: Array.isArray(item.items) ? item.items.map((entry) => normalizePositionKnowledgeItem(entry as Record<string, unknown>)) : undefined,
+  };
+}
+
+function normalizeAiEmployee(item: Record<string, unknown>): AiEmployee {
+  return {
+    id: String(item.id),
+    code: String(item.code ?? ''),
+    name: String(item.name ?? ''),
+    description: item.description == null ? undefined : String(item.description),
+    positionCode: item.positionCode == null ? undefined : String(item.positionCode),
+    departmentId: item.departmentId == null ? undefined : String(item.departmentId),
+    enabled: item.enabled === true || item.enabled === 1,
+    status: String(item.status ?? ''),
+    packages: Array.isArray(item.packages) ? item.packages.map((pkg) => normalizePositionPackage(pkg as Record<string, unknown>)) : undefined,
+  };
+}
+
+function normalizeIndexedChunk(item: Record<string, unknown>): IndexedChunk {
+  return {
+    id: String(item.id),
+    sourceType: String(item.sourceType ?? ''),
+    sourceId: String(item.sourceId ?? ''),
+    sourceVersion: Number(item.sourceVersion ?? 0),
+    wikiPageId: item.wikiPageId == null ? undefined : String(item.wikiPageId),
+    wikiPageVersion: item.wikiPageVersion == null ? undefined : Number(item.wikiPageVersion),
+    sourceTitle: String(item.sourceTitle ?? '未命名知识'),
+    chunkSummary: item.chunkSummary == null ? undefined : String(item.chunkSummary),
+    aclPolicyId: item.aclPolicyId == null ? undefined : String(item.aclPolicyId),
+    policyName: item.policyName == null ? undefined : String(item.policyName),
+    securityLevel: item.securityLevel == null ? undefined : String(item.securityLevel),
+    departmentTags: item.departmentTags == null ? undefined : String(item.departmentTags),
+    positionTags: item.positionTags == null ? undefined : String(item.positionTags),
+    knowledgeStatus: String(item.knowledgeStatus ?? ''),
+    preview: String(item.preview ?? ''),
+    createdAt: item.createdAt == null ? undefined : String(item.createdAt),
+    updatedAt: item.updatedAt == null ? undefined : String(item.updatedAt),
+  };
+}
+
+function normalizeRagAclPolicy(item: Record<string, unknown>): RagAclPolicy {
+  return {
+    id: String(item.id),
+    policyName: String(item.policyName ?? ''),
+    securityLevel: String(item.securityLevel ?? 'internal'),
+    aclVersion: Number(item.aclVersion ?? 1),
+    status: String(item.status ?? 'active'),
+    bindingCount: item.bindingCount == null ? undefined : Number(item.bindingCount),
+    activeChunkCount: item.activeChunkCount == null ? undefined : Number(item.activeChunkCount),
+    createdAt: item.createdAt == null ? undefined : String(item.createdAt),
+    updatedAt: item.updatedAt == null ? undefined : String(item.updatedAt),
+  };
+}
+
+function normalizeRagAclBinding(item: Record<string, unknown>): RagAclBinding {
+  return {
+    id: String(item.id),
+    policyId: String(item.policyId ?? ''),
+    policyName: item.policyName == null ? undefined : String(item.policyName),
+    principalType: String(item.principalType ?? 'department'),
+    principalId: String(item.principalId ?? ''),
+    action: String(item.action ?? 'use_in_rag'),
+    effect: String(item.effect ?? 'allow'),
+    createdAt: item.createdAt == null ? undefined : String(item.createdAt),
+  };
+}
+
+function normalizeWikiPage(item: Record<string, unknown>): WikiPage {
+  return {
+    id: String(item.id),
+    title: String(item.title ?? ''),
+    pageType: String(item.pageType ?? 'general'),
+    summary: item.summary == null ? undefined : String(item.summary),
+    content: item.content == null ? undefined : String(item.content),
+    status: String(item.status ?? ''),
+    syncStatus: String(item.syncStatus ?? ''),
+    healthStatus: String(item.healthStatus ?? ''),
+    currentVersion: Number(item.currentVersion ?? 1),
+    departmentId: item.departmentId == null ? undefined : String(item.departmentId),
+    departmentName: item.departmentName == null ? undefined : String(item.departmentName),
+    aclPolicyId: item.aclPolicyId == null ? undefined : String(item.aclPolicyId),
+    aclPolicyName: item.aclPolicyName == null ? undefined : String(item.aclPolicyName),
+    aclBindingCount: item.aclBindingCount == null ? undefined : Number(item.aclBindingCount),
+    securityLevel: item.securityLevel == null ? undefined : String(item.securityLevel),
+    relationCount: item.relationCount == null ? undefined : Number(item.relationCount),
+    heatScore: item.heatScore == null ? undefined : Number(item.heatScore),
+    createdAt: item.createdAt == null ? undefined : String(item.createdAt),
+    updatedAt: item.updatedAt == null ? undefined : String(item.updatedAt),
+  };
+}
+
+function normalizeWikiRelation(item: Record<string, unknown>): WikiRelation {
+  return {
+    id: String(item.id),
+    sourcePageId: String(item.sourcePageId ?? ''),
+    sourceTitle: item.sourceTitle == null ? undefined : String(item.sourceTitle),
+    targetPageId: String(item.targetPageId ?? ''),
+    targetTitle: item.targetTitle == null ? undefined : String(item.targetTitle),
+    relationType: String(item.relationType ?? 'related_to') as WikiRelation['relationType'],
+    direction: String(item.direction ?? 'outgoing') as WikiRelation['direction'],
+    createdAt: item.createdAt == null ? undefined : String(item.createdAt),
+  };
+}
+
+function normalizeWikiStructureGroup(item: Record<string, unknown>): WikiStructureGroup {
+  return {
+    type: String(item.type ?? 'status') as WikiStructureGroup['type'],
+    value: String(item.value ?? ''),
+    label: String(item.label ?? ''),
+    count: Number(item.count ?? 0),
+    children: Array.isArray(item.children) ? item.children.map((child) => normalizeWikiStructureGroup(child as Record<string, unknown>)) : [],
+  };
+}
+
+function wikiPageQuery(options: { query?: string; status?: string; departmentId?: string; pageType?: string } = {}) {
+  const params = new URLSearchParams();
+  if (options.query) {
+    params.set('query', options.query);
+  }
+  if (options.status) {
+    params.set('status', options.status);
+  }
+  if (options.departmentId) {
+    params.set('departmentId', options.departmentId);
+  }
+  if (options.pageType) {
+    params.set('pageType', options.pageType);
+  }
+  return params.toString() ? `?${params.toString()}` : '';
+}
+
+export const knowledgeApi = {
+  listWikiPages: async (query = '', status = '', filters: { departmentId?: string; pageType?: string } = {}) => {
+    const data = await request<Array<Record<string, unknown>>>(`/api/wiki/pages${wikiPageQuery({ query, status, ...filters })}`);
+    return data.map(normalizeWikiPage);
+  },
+  getWikiStructure: async (groupBy = 'department,pageType,status', query = '', status = '') => {
+    const params = new URLSearchParams({ groupBy });
+    if (query) {
+      params.set('query', query);
+    }
+    if (status) {
+      params.set('status', status);
+    }
+    const data = await request<Record<string, unknown>>(`/api/wiki/structure?${params.toString()}`);
+    return {
+      groupBy: String(data.groupBy ?? groupBy),
+      total: Number(data.total ?? 0),
+      filters: data.filters as Record<string, unknown> | undefined,
+      groups: Array.isArray(data.groups) ? data.groups.map((item) => normalizeWikiStructureGroup(item as Record<string, unknown>)) : [],
+    };
+  },
+  getWikiPage: async (id: string) => {
+    const data = await request<Record<string, unknown>>(`/api/wiki/pages/${id}`);
+    return normalizeWikiPage(data);
+  },
+  createWikiPage: async (payload: Partial<WikiPage>) => {
+    const data = await request<Record<string, unknown>>('/api/wiki/pages', { method: 'POST', body: JSON.stringify(normalizeRecord(payload as Record<string, unknown>)) });
+    return normalizeWikiPage(data);
+  },
+  updateWikiPage: async (id: string, payload: Partial<WikiPage>) => {
+    const data = await request<Record<string, unknown>>(`/api/wiki/pages/${id}`, { method: 'PUT', body: JSON.stringify(normalizeRecord(payload as Record<string, unknown>)) });
+    return normalizeWikiPage(data);
+  },
+  publishWikiPage: async (id: string) => {
+    const data = await request<Record<string, unknown>>(`/api/wiki/pages/${id}/publish`, { method: 'POST' });
+    return normalizeWikiPage(data);
+  },
+  archiveWikiPage: async (id: string) => {
+    const data = await request<Record<string, unknown>>(`/api/wiki/pages/${id}/archive`, { method: 'POST' });
+    return normalizeWikiPage(data);
+  },
+  deleteWikiPage: (id: string) => request<void>(`/api/wiki/pages/${id}`, { method: 'DELETE' }),
+  getWikiSyncStatus: (id: string) => request<Record<string, unknown>>(`/api/wiki/pages/${id}/sync-status`),
+  listWikiRelations: async (id: string) => {
+    const data = await request<Array<Record<string, unknown>>>(`/api/wiki/pages/${id}/relations`);
+    return data.map(normalizeWikiRelation);
+  },
+  createWikiRelation: async (id: string, payload: { targetPageId: string; relationType: WikiRelation['relationType'] }) => {
+    const data = await request<Record<string, unknown>>(`/api/wiki/pages/${id}/relations`, { method: 'POST', body: JSON.stringify(payload) });
+    return normalizeWikiRelation(data);
+  },
+  deleteWikiRelation: (id: string, relationId: string) => request<void>(`/api/wiki/pages/${id}/relations/${relationId}`, { method: 'DELETE' }),
+
+  listPositionPackages: async () => {
+    const data = await request<Array<Record<string, unknown>>>('/api/position-packages');
+    return data.map(normalizePositionPackage);
+  },
+  getPositionPackage: async (id: string) => {
+    const data = await request<Record<string, unknown>>(`/api/position-packages/${id}`);
+    return normalizePositionPackage(data);
+  },
+  createPositionPackage: (payload: Partial<PositionPackage>) =>
+    request<PositionPackage>('/api/position-packages', { method: 'POST', body: JSON.stringify(payload) }),
+  updatePositionPackage: (id: string, payload: Partial<PositionPackage>) =>
+    request<PositionPackage>(`/api/position-packages/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  replacePositionPackageItems: (id: string, items: Array<Partial<PositionKnowledgeItem>>) =>
+    request<PositionPackage>(`/api/position-packages/${id}/items`, { method: 'PUT', body: JSON.stringify({ items }) }),
+  submitPositionPackageReview: (id: string) => request<PositionPackage>(`/api/position-packages/${id}/submit-review`, { method: 'POST' }),
+  publishPositionPackage: (id: string) => request<PositionPackage>(`/api/position-packages/${id}/publish`, { method: 'POST' }),
+  rejectPositionPackage: (id: string) => request<PositionPackage>(`/api/position-packages/${id}/reject`, { method: 'POST' }),
+  archivePositionPackage: (id: string) => request<PositionPackage>(`/api/position-packages/${id}/archive`, { method: 'POST' }),
+  deletePositionPackage: (id: string) => request<void>(`/api/position-packages/${id}`, { method: 'DELETE' }),
+
+  listHealthIssues: () => request<HealthIssue[]>('/api/knowledge-health/issues'),
+  listHealthReports: () => request<HealthReport[]>('/api/knowledge-health/reports'),
+  generateHealthReport: () => request<HealthReport>('/api/knowledge-health/reports/generate', { method: 'POST' }),
+  getMaintenanceWindow: () => request<Record<string, unknown>>('/api/knowledge-health/maintenance-window'),
+  startMaintenanceWindow: (reason: string) =>
+    request<Record<string, unknown>>('/api/knowledge-health/maintenance-window/start', { method: 'POST', body: JSON.stringify({ reason }) }),
+  endMaintenanceWindow: () => request<Record<string, unknown>>('/api/knowledge-health/maintenance-window/end', { method: 'POST' }),
+
+  listAiEmployees: async () => {
+    const data = await request<Array<Record<string, unknown>>>('/api/admin/ai-employees');
+    return data.map(normalizeAiEmployee);
+  },
+  getAiEmployee: async (id: string) => {
+    const data = await request<Record<string, unknown>>(`/api/admin/ai-employees/${id}`);
+    return normalizeAiEmployee(data);
+  },
+  createAiEmployee: async (payload: Partial<AiEmployee>) => {
+    const data = await request<Record<string, unknown>>('/api/admin/ai-employees', { method: 'POST', body: JSON.stringify(payload) });
+    return normalizeAiEmployee(data);
+  },
+  updateAiEmployee: async (id: string, payload: Partial<AiEmployee>) => {
+    const data = await request<Record<string, unknown>>(`/api/admin/ai-employees/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
+    return normalizeAiEmployee(data);
+  },
+  updateAiEmployeePackages: async (id: string, packageIds: string[]) => {
+    const data = await request<Record<string, unknown>>(`/api/admin/ai-employees/${id}/position-packages`, {
+      method: 'PUT',
+      body: JSON.stringify({ packageIds: packageIds.map((item) => Number(item)) }),
+    });
+    return normalizeAiEmployee(data);
+  },
+
+  getRagOverview: () => request<Record<string, unknown>>('/api/rag/overview'),
+  listIndexedChunks: async () => {
+    const data = await request<Array<Record<string, unknown>>>('/api/rag/indexed-chunks');
+    return data.map(normalizeIndexedChunk);
+  },
+  updateIndexedChunkGovernance: async (id: string, payload: Partial<IndexedChunk>) => {
+    const data = await request<Record<string, unknown>>(`/api/rag/chunks/${id}/governance`, { method: 'PUT', body: JSON.stringify(payload) });
+    return normalizeIndexedChunk(data);
+  },
+  listRagAclPolicies: async () => {
+    const data = await request<Array<Record<string, unknown>>>('/api/rag/acl-policies');
+    return data.map(normalizeRagAclPolicy);
+  },
+  createRagAclPolicy: async (payload: Partial<RagAclPolicy>) => {
+    const data = await request<Record<string, unknown>>('/api/rag/acl-policies', { method: 'POST', body: JSON.stringify(payload) });
+    return normalizeRagAclPolicy(data);
+  },
+  updateRagAclPolicy: async (id: string, payload: Partial<RagAclPolicy>) => {
+    const data = await request<Record<string, unknown>>(`/api/rag/acl-policies/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
+    return normalizeRagAclPolicy(data);
+  },
+  listRagAclBindings: async () => {
+    const data = await request<Array<Record<string, unknown>>>('/api/rag/acl-bindings');
+    return data.map(normalizeRagAclBinding);
+  },
+  createRagAclBinding: async (payload: Partial<RagAclBinding>) => {
+    const data = await request<Record<string, unknown>>('/api/rag/acl-bindings', { method: 'POST', body: JSON.stringify(payload) });
+    return normalizeRagAclBinding(data);
+  },
+  deleteRagAclBinding: (id: string) => request<void>(`/api/rag/acl-bindings/${id}`, { method: 'DELETE' }),
+  searchRetrieval: (payload: unknown) =>
+    request<Record<string, unknown>>('/api/retrieval/debug', { method: 'POST', body: JSON.stringify(payload) }),
+};

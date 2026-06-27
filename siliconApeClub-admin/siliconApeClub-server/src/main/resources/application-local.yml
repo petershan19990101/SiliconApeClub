@@ -1,0 +1,30 @@
+# 本地 MVP 配置：使用 PostgreSQL + pgvector 作为唯一验收数据库。
+spring:
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DATABASE:docspace}
+    username: ${POSTGRES_USERNAME:docspace}
+    password: ${POSTGRES_PASSWORD:docspace123}
+    driver-class-name: org.postgresql.Driver
+  flyway:
+    enabled: true
+    locations: classpath:db/migration-postgres
+  messages:
+    encoding: UTF-8
+
+server:
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+
+docspace:
+  redis:
+    cache-enabled: false
+  rocketmq:
+    enabled: false
+  minio:
+    enabled: false
+  retrieval:
+    base-url: ${RETRIEVAL_BASE_URL:http://localhost:8090}
+    service-token: ${RETRIEVAL_SERVICE_TOKEN:siliconapeclub-retrieval-dev-token}

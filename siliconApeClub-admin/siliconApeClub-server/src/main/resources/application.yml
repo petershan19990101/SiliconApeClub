@@ -1,0 +1,119 @@
+# 后端默认配置文件，定义正式技术栈下的数据源、中间件和业务开关。
+logging:
+  file:
+    name: logs/siliconApeClub-server.log
+  logback:
+    rollingpolicy:
+      max-file-size: 50MB
+      max-history: 30
+      total-size-cap: 2GB
+
+server:
+  port: 8080
+  servlet:
+    context-path: /
+
+spring:
+  application:
+    name: siliconApeClub-server
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DATABASE:docspace}
+    username: ${POSTGRES_USERNAME:docspace}
+    password: ${POSTGRES_PASSWORD:docspace123}
+    driver-class-name: org.postgresql.Driver
+  redis:
+    host: ${REDIS_HOST:localhost}
+    port: ${REDIS_PORT:6379}
+    password: ${REDIS_PASSWORD:}
+    timeout: 3000
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 100MB
+  flyway:
+    enabled: true
+    locations: classpath:db/migration-postgres
+  jackson:
+    default-property-inclusion: non_null
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+
+mybatis-plus:
+  mapper-locations: classpath*:mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: auto
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui/index.html
+    tags-sorter: alpha
+    operations-sorter: alpha
+
+rocketmq:
+  name-server: ${ROCKETMQ_NAME_SERVER:localhost:9876}
+  producer:
+    group: ${ROCKETMQ_PRODUCER_GROUP:siliconapeclub-server-producer}
+    send-message-timeout: 3000
+
+docspace:
+  cors:
+    allow-credentials: true
+    max-age: 1800
+    allowed-origins:
+      - http://localhost:3000
+      - http://127.0.0.1:3000
+    allowed-methods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      - OPTIONS
+    allowed-headers:
+      - '*'
+    exposed-headers:
+      - Authorization
+  jwt:
+    secret: ${JWT_SECRET:docspace-change-me-docspace-change-me}
+    expire-seconds: 7200
+  redis:
+    cache-enabled: true
+    cache-ttl-seconds: 300
+  rocketmq:
+    enabled: true
+    topic:
+      document-lifecycle: docspace.document.lifecycle
+  minio:
+    enabled: true
+    endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+    access-key: ${MINIO_ACCESS_KEY:minioadmin}
+    secret-key: ${MINIO_SECRET_KEY:minioadmin}
+    bucket: ${MINIO_BUCKET:docspace}
+  retrieval:
+    base-url: ${RETRIEVAL_BASE_URL:http://localhost:8090}
+    service-token: ${RETRIEVAL_SERVICE_TOKEN:siliconapeclub-retrieval-dev-token}
+  dashscope:
+    api-key: ${DASHSCOPE_API_KEY:}
+    base-url: ${DASHSCOPE_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+    embedding-model: ${DASHSCOPE_EMBEDDING_MODEL:text-embedding-v4}
+    embedding-dimensions: ${DASHSCOPE_EMBEDDING_DIMENSIONS:1024}
+    rerank-endpoint: ${DASHSCOPE_RERANK_ENDPOINT:https://dashscope.aliyuncs.com/compatible-api/v1/reranks}
+    rerank-model: ${DASHSCOPE_RERANK_MODEL:qwen3-rerank}
+    chat-model: ${DASHSCOPE_CHAT_MODEL:qwen-plus}
+
+# Apollo 配置中心（默认关闭；接入时将 APOLLO_BOOTSTRAP_ENABLED 设为 true，并配置 Meta 地址与 app.id）
+app:
+  id: ${APOLLO_APP_ID:siliconApeClub-server}
+apollo:
+  meta: ${APOLLO_META:http://localhost:8080}
+  bootstrap:
+    enabled: ${APOLLO_BOOTSTRAP_ENABLED:false}
+    eagerLoad:
+      enabled: ${APOLLO_BOOTSTRAP_EAGER_LOAD:false}
+    namespaces: ${APOLLO_BOOTSTRAP_NAMESPACES:application}
+

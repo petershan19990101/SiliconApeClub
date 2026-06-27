@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+    <!-- 与 application.yml 中 logging.* 一致 -->
+    <springProperty name="LOG_FILE" scope="context" source="logging.file.name" defaultValue="logs/siliconApeClub-server.log"/>
+    <springProperty name="ROLLING_MAX_FILE_SIZE" scope="context" source="logging.logback.rollingpolicy.max-file-size" defaultValue="50MB"/>
+    <springProperty name="ROLLING_MAX_HISTORY" scope="context" source="logging.logback.rollingpolicy.max-history" defaultValue="30"/>
+    <springProperty name="ROLLING_TOTAL_SIZE_CAP" scope="context" source="logging.logback.rollingpolicy.total-size-cap" defaultValue="2GB"/>
+
+    <appender name="ROLLING_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_FILE}</file>
+        <encoder>
+            <pattern>${FILE_LOG_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <!-- 按日 + 单文件超限时递增序号；历史压缩为 .gz -->
+            <fileNamePattern>${LOG_FILE}.%d{yyyy-MM-dd}.%i.gz</fileNamePattern>
+            <maxFileSize>${ROLLING_MAX_FILE_SIZE}</maxFileSize>
+            <maxHistory>${ROLLING_MAX_HISTORY}</maxHistory>
+            <totalSizeCap>${ROLLING_TOTAL_SIZE_CAP}</totalSizeCap>
+            <cleanHistoryOnStart>false</cleanHistoryOnStart>
+        </rollingPolicy>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ROLLING_FILE"/>
+    </root>
+</configuration>
