@@ -344,3 +344,25 @@ PLEASE IMPLEMENT THIS PLAN:
 - PostgreSQL 库名、用户名仍为 `docspace`，这是数据迁移项，暂不混入工程重命名。
 - Java package `com.docspace` 与 `docspace.*` 配置前缀暂时保留，避免扩大兼容性风险；后续如要彻底品牌化，可单独做包名和配置前缀迁移。
 - `DOCSPACE_SERVER_BASE_URL` 只作为 retrieval-service 的兼容环境变量保留。
+
+### User
+
+我们来继续更新架构文档，使其与当前现状一致，不用体现历史沿革，需要找历史版本我们可以到git提交记录中获取。比如4.1 MVP 逻辑服务章节直接描述当前架构现状。
+
+### Assistant
+
+已更新 `ARCHITECTURE.md`，将架构文档从“讨论稿/路线说明”调整为“当前架构基线”：
+
+- 文档版本更新为 v0.2，状态改为“当前架构基线”，日期改为 2026-06-27。
+- 2.1 从“先模块化，后微服务化”的建议口吻改为当前事实：管理台模块化单体 + 平级知识服务 + Docker Compose 编排。
+- 3 章总体架构移除未落地的 OpenSearch、Milvus/Qdrant/Neo4j 等组件，只保留当前 PostgreSQL/pgvector、Redis、MinIO、RocketMQ。
+- 4.1 从 “MVP 逻辑服务” 改为 “当前逻辑服务”，直接列出当前逻辑服务、物理承载、职责和数据边界。
+- 4.2 从 “目标态微服务” 改为 “服务边界”，描述当前代码和数据模型的服务边界。
+- 4.3 服务职责去掉历史和建议口吻，补齐当前承载关系。
+- 6 章技术选型改为当前选型和当前用途，不再写 MVP/目标态双列表。
+- 7.1 核心存储收敛为当前实际运行栈：PostgreSQL、pgvector、MinIO、Redis、RocketMQ。
+- 8 章部署拓扑改为当前 Docker Compose 拓扑，明确容器名、镜像、端口和验证入口。
+- 13 章从“推荐实施路线”改为“当前已落地能力”，按工程部署、管理台能力、知识层闭环列出现状。
+- 14 章结论改为当前架构基线说明，明确 `siliconApeClub-admin` 与预留的 `siliconApeClub-worker-platform` 边界。
+
+本轮仅修改架构文档和对话记录，未改动代码。

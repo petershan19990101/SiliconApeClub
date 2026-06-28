@@ -2,9 +2,9 @@
 
 所属平台：硅基猿猴俱乐部  
 关联产品：Silicon Ape Club Knowledge Layer  
-版本：v0.1  
-状态：架构讨论稿  
-日期：2026-06-20
+版本：v0.2  
+状态：当前架构基线  
+日期：2026-06-27
 
 ## 1. 架构目标
 
@@ -24,19 +24,11 @@
 
 ## 2. 设计原则
 
-### 2.1 先模块化，后微服务化
+### 2.1 当前采用模块化服务边界
 
-MVP 阶段不建议一开始拆成大量独立微服务，否则交付成本、联调成本和运维复杂度会过高。
+当前架构采用“管理台模块化单体 + 平级知识服务 + Docker Compose 编排”的形态。`siliconApeClub-server` 承载管理台后端与 API Gateway 合并能力，`retrieval-service`、`knowledge-pipeline-worker`、`knowledge-runtime-service`、`task-memory-service` 作为根目录平级服务独立运行。
 
-建议：
-
-```text
-MVP：模块化单体 + 异步 Worker + 独立检索服务
-试点：核心服务拆分
-生产：微服务化 + 高可用 + 独立扩缩容
-```
-
-模块边界必须按微服务标准设计，代码、数据模型和事件都要避免强耦合，后续可以平滑拆分。
+代码、数据模型、接口和事件按逻辑服务边界组织，当前重点是让管理台、Wiki、RAG、AI 员工配置、岗位知识管理和任务记忆形成闭环。
 
 ### 2.2 Wiki 是知识源头，RAG 是派生索引
 
@@ -115,6 +107,7 @@ AI 员工的每次检索和引用都必须可回放。
   API Gateway / Auth / IAM / RBAC / ABAC / AI Identity
       ↓
 业务服务层
+  Admin Console Frontend
   Doc Service
   Wiki Service
   Knowledge Pipeline Service
@@ -129,11 +122,9 @@ AI 员工的每次检索和引用都必须可回放。
       ↓
 数据与索引层
   PostgreSQL / pgvector
-  OpenSearch
   Redis
   MinIO
   RocketMQ
-  Optional: Milvus / Qdrant / Neo4j
       ↓
 AI 能力层
   LLM Provider
@@ -144,29 +135,29 @@ AI 能力层
 
 ## 4. 微服务结构
 
-### 4.1 MVP 逻辑服务
+### 4.1 当前逻辑服务
 
-MVP 阶段建议物理上先合并部署为 3 到 5 个进程，逻辑上按以下服务划分。
+当前逻辑服务直接对应已落地的工程目录、容器服务和 API 边界。
 
-| 服务 | MVP 物理形态 | 主要职责 | 是否建议独立库 |
+| 逻辑服务 | 当前物理承载 | 当前职责 | 数据边界 |
 | --- | --- | --- | --- |
-| API Gateway | 可与后端合并 | 路由、鉴权入口、限流、审计入口 | 否 |
-| Auth & IAM Service | 可与后端合并 | 用户、角色、部门、岗位、AI 员工身份、权限策略 | 可共享主库 |
-| Doc Service | 保留原文档治理能力，运行于 `siliconApeClub-server` | 文档上传、目录、版本、解析产物、源文件管理 | 可共享主库 |
-| Wiki Service | 新增模块 | Wiki 页面、模板、版本、关系、人机共读知识 | 可共享主库 |
-| Knowledge Pipeline Worker | 独立 Worker | 清洗、切片、摘要、标签、实体抽取、embedding、索引任务 | 共享主库 |
-| Knowledge Index Service | 可与 Worker 合并 | 索引账本、索引状态、重试、回滚 | 共享主库 |
-| Retrieval Service | 建议独立 | 混合检索、权限预过滤、rerank、召回后强校验、引用结果 | 可独立服务 |
-| Knowledge Runtime Service | 可与后端合并，接口边界独立 | AI 员工运行时上下文、Wiki 结构化读取、岗位 profile、调用编排 | 共享主库 |
-| Task Memory Service | 可与 Audit 合并 | AI 任务记忆、citation 关联、沉淀候选、Wiki proposal 关联 | 共享主库 |
-| Position Knowledge Service | 可与 Wiki 合并 | 基于 Wiki 的岗位知识管理、AI 员工绑定、默认检索范围、审核发布 | 共享主库 |
-| Knowledge Health Service | 可与 Worker 合并 | 冲突检测、过期检测、热度统计、健康报告 | 共享主库 |
-| Audit Trace Service | 可与后端合并 | 操作审计、AI 引用日志、检索回放日志 | 共享主库，日志可外置 |
-| Notification Service | 可与后端合并 | 巡检通知、审核通知、同步失败通知 | 共享主库 |
+| Admin Console Frontend | `siliconApeClub-front` | 硅基猿猴俱乐部管理台静态入口，承载知识资产、Wiki 中心、RAG 管理台、AI 员工配置、岗位知识管理、权限与知识健康运营 | 无状态静态资源 |
+| API Gateway | `siliconApeClub-server` | `/api/**` 统一入口、JWT 鉴权、CORS、管理台后端代理 | 共享主库 |
+| Auth & IAM Service | `siliconApeClub-server` | 用户、角色、部门、菜单、按钮权限、AI 员工身份和权限边界 | 共享主库 |
+| Doc Service | `siliconApeClub-server` | 文档上传、目录、版本、解析产物、源文件管理、审核发布、推送 RAG | 共享主库 + MinIO |
+| Wiki Center Service | `siliconApeClub-server` | Wiki 页面、版本、发布、归档、结构分组、权限展示、页面关系维护 | 共享主库 |
+| RAG Management Service | `siliconApeClub-server` + `retrieval-service` | RAG 调试回放、索引 chunk 可见性、ACL policy/binding 管控、chunk 治理 | 共享主库 + pgvector |
+| Knowledge Pipeline Worker | `knowledge-pipeline-worker` + `siliconApeClub-server` | 文档到 Wiki、Wiki 到 chunk、同步任务、通知与审计证据 | 共享主库 + RocketMQ |
+| Knowledge Index Service | `retrieval-service` | chunk 写入、embedding、pgvector 索引、索引账本状态回写 | 共享主库 + pgvector |
+| Retrieval Service | `retrieval-service` | RAG 检索、权限预过滤、rerank、召回后强校验、citation callback | 共享主库 + pgvector |
+| Knowledge Runtime Service | `knowledge-runtime-service` | AI 员工 runtime context、AI 可读 Wiki、岗位 profile、Wiki proposal 审核入口 | 共享主库 |
+| Task Memory Service | `task-memory-service` | AI 任务记忆、citation 关联、沉淀候选、Wiki proposal promotion | 共享主库 |
+| Position Knowledge Service | `siliconApeClub-server` | 基于 Wiki 的岗位知识管理、AI 员工绑定、默认检索范围、审核发布 | 共享主库 |
+| Knowledge Health Service | `siliconApeClub-server` | 冲突检测、过期检测、同步异常、权限异常、健康报告和巡检窗口 | 共享主库 |
+| Audit Trace Service | `siliconApeClub-server` | 人类操作审计、AI 引用日志、检索回放日志 | 共享主库 |
+| Notification Service | `siliconApeClub-server` | 巡检通知、审核通知、同步失败通知 | 共享主库 |
 
-当前 MVP 的前端入口不再定位为单一文档管理系统，而是“硅基猿猴俱乐部管理台”。管理台承载知识资产、Wiki 中心、RAG 管理台、AI 员工配置、岗位知识管理、权限与知识健康运营。`siliconApeClub-front` 作为静态资源容器部署，`siliconApeClub-server` 继续作为管理台后端与 API Gateway 的合并形态。
-
-MVP 当前物理进程：
+当前物理进程：
 
 | 物理进程 | 承载逻辑服务 |
 | --- | --- |
@@ -188,15 +179,15 @@ knowledge-pipeline-worker/
 knowledge-runtime-service/
 task-memory-service/
 
-planned:
+reserved:
   siliconApeClub-worker-platform/
 ```
 
-`siliconApeClub-admin` 定位为管理平台，服务业务人员、知识管理员、测试和运营同学；后续新增的 `siliconApeClub-worker-platform` 定位为硅基俱乐部员工平台，对外提供 AI 员工服务能力、任务入口与运行期交互能力。两者共用知识层事实源，但前者负责“管理和治理”，后者负责“调用和服务”。
+`siliconApeClub-admin` 定位为管理平台，服务业务人员、知识管理员、测试和运营同学；`siliconApeClub-worker-platform` 是预留的硅基俱乐部员工平台工程，面向外部 AI 员工服务能力、任务入口与运行期交互。两者共用知识层事实源，管理台负责“管理和治理”，员工平台负责“调用和服务”。
 
-### 4.2 目标态微服务
+### 4.2 服务边界
 
-生产规模扩大后，建议拆为：
+当前代码和数据模型按以下服务边界组织。独立部署与否不改变接口和数据职责：
 
 ```text
 gateway-service
@@ -208,11 +199,11 @@ knowledge-index-service
 retrieval-service
 knowledge-runtime-service
 task-memory-service
-position-package-service
+position-knowledge-service
 knowledge-health-service
 audit-trace-service
 notification-service
-admin-service
+admin-console
 ```
 
 ### 4.3 服务职责详情
@@ -226,12 +217,7 @@ admin-service
 - 统一限流
 - 请求日志
 - CORS
-- 灰度发布入口
-
-技术建议：
-
-- MVP：Spring Cloud Gateway 或 Nginx
-- 生产：Spring Cloud Gateway / Kong / APISIX
+- 管理台后端代理
 
 #### identity-service
 
@@ -262,10 +248,6 @@ admin-service
 - 人工校正
 - 文档审核发布
 
-说明：
-
-现有 siliconApeClub-admin 的文档管理能力可作为该服务的基础。
-
 #### wiki-service
 
 职责：
@@ -290,7 +272,7 @@ admin-service
 - `ks_acl_binding`
 - `ks_chunk`
 
-MVP 管理端接口：
+当前管理端接口：
 
 ```http
 GET    /api/wiki/structure?groupBy=department,pageType,status
@@ -307,7 +289,7 @@ POST   /api/wiki/pages/{id}/relations
 DELETE /api/wiki/pages/{id}/relations/{relationId}
 ```
 
-关系图谱第一阶段不引入 Neo4j 等图数据库，先由 PostgreSQL `ks_wiki_relation` 承载轻量网络。后续当出现自动实体抽取、跨页面冲突检测、路径分析和社区发现需求时，再评估 AntV G6/Cytoscape 前端可视化与图数据库拆分。
+关系图谱当前由 PostgreSQL `ks_wiki_relation` 承载轻量网络，Wiki 中心在页面详情中展示入向、出向和关系类型。
 
 #### knowledge-pipeline-service
 
@@ -324,11 +306,11 @@ DELETE /api/wiki/pages/{id}/relations/{relationId}
 - 质量检查
 - 发布索引任务
 
-技术建议：
+当前承载：
 
-- MVP：Java Worker + Python Worker 混合
-- Java 负责业务编排
-- Python 负责 NLP、OCR、模型调用、复杂解析
+- `siliconApeClub-server` 负责管理台触发、审核和任务入口。
+- `knowledge-pipeline-worker` 负责独立文档到 Wiki 流水线。
+- `retrieval-service` 负责写入 chunk、embedding 和索引记录。
 
 #### knowledge-index-service
 
@@ -363,11 +345,10 @@ DELETE /api/wiki/pages/{id}/relations/{relationId}
 - 返回带来源、版本、分数、解释的结果
 - 记录 citation log
 
-建议独立部署原因：
+当前独立部署原因：
 
 - 与 AI 员工交互频率高
 - 性能要求不同于后台管理
-- 后续需要独立扩容
 - 需要接入多种向量库和 rerank 模型
 
 #### knowledge-runtime-service
@@ -383,10 +364,9 @@ DELETE /api/wiki/pages/{id}/relations/{relationId}
 - 写入 citation log
 - 限制 AI 员工只能提交反馈、草稿和 proposal
 
-MVP 形态：
+当前形态：
 
-- 物理上可与 `siliconApeClub-server` 合并部署。
-- 代码上建议保持独立 controller/service/package。
+- 独立进程 `knowledge-runtime-service`。
 - 对 AI 员工暴露稳定 API，避免直接调用后台管理接口。
 
 关键模型：
@@ -406,11 +386,10 @@ MVP 形态：
 - 识别可沉淀知识候选
 - 支持 task memory promoted 为 Wiki proposal
 
-MVP 形态：
+当前形态：
 
-- 可与 `audit-trace-service` 合并。
-- 先实现结构化任务记录和手动 promote。
-- 后续再引入自动摘要、实体抽取和知识候选推荐。
+- 独立进程 `task-memory-service`。
+- 实现结构化任务记录和 Wiki proposal promotion。
 
 关键模型：
 
@@ -418,7 +397,7 @@ MVP 形态：
 - `knowledge_wiki_proposal`
 - `knowledge_wiki_proposal_evidence`
 
-#### position-package-service
+#### position-knowledge-service
 
 职责：
 
@@ -595,7 +574,7 @@ retrieval-service 可检索新知识
 
 ### 5.6 Knowledge Runtime API 契约
 
-运行时接口建议先按 REST 落地，后续高频场景可以补充内部 gRPC。
+运行时接口当前按 REST 落地。
 
 ```http
 GET  /api/ai-employees/{id}/runtime-context
@@ -628,78 +607,67 @@ GET  /api/knowledge/sync-jobs/{id}
 
 ### 6.1 前端
 
-| 项目 | MVP 选型 | 目标态选型 | 理由 |
-| --- | --- | --- | --- |
-| 前端框架 | React + Vite + TypeScript | React + Vite 或 Next.js | 现有项目已使用 React/Vite，迁移成本低 |
-| UI 组件 | Tailwind + 自研组件 | Ant Design / Arco / 自研 Design System | 企业后台需要稳定表格、表单、权限控件 |
-| Wiki 编辑器 | Markdown Editor + Block Editor 预研 | TipTap / Plate / Lexical | LLM Wiki 需要结构化编辑和块级元数据 |
-| 图谱可视化 | Wiki 详情轻量关系面板 | AntV G6 / Cytoscape | MVP 先展示上下游关系网络，后续再做复杂图分析 |
+| 项目 | 当前选型 | 当前用途 |
+| --- | --- | --- |
+| 前端框架 | React + Vite + TypeScript | 管理台单页应用 |
+| 样式体系 | Tailwind CSS + 自研组件 | 表格、表单、弹窗、权限控件、知识运营页面 |
+| 文档预览 | `pdfjs-dist`、`docx-preview`、`xlsx`、自研渲染器 | 文档源文件和解析结果预览 |
+| Wiki 编辑 | Markdown Editor + Markdown 渲染 | Wiki 正文编辑、解析内容校正、知识提案展示 |
+| Wiki 结构化展现 | 三栏结构工作台 | 分组树、页面列表、详情/权限/关系面板 |
+| 关系图谱 | Wiki 详情轻量关系网络 | 展示引用、依赖、相关、替代、重复关系 |
+| 静态资源部署 | Python `serve_static.py` 容器 | `/m/silicon-ape-club-admin/` 管理台入口 |
 
 ### 6.2 后端
 
-| 项目 | MVP 选型 | 目标态选型 | 理由 |
-| --- | --- | --- | --- |
-| 主后端 | Spring Boot | Spring Boot 3 + Java 17 | 保留现有 Java 生态，长期建议升级 |
-| ORM | MyBatis-Plus | MyBatis-Plus / JPA 混合 | 现有项目已使用 MyBatis-Plus |
-| API | REST | REST + 内部 gRPC 可选 | 管理端和 Knowledge Runtime API 先用 REST，检索高频可考虑 gRPC |
-| 异步任务 | RocketMQ + Worker | RocketMQ + Temporal/Flowable 可选 | 已有 RocketMQ 骨架，复杂编排后续增强 |
-| 任务调度 | Spring Scheduler / XXL-Job | XXL-Job / DolphinScheduler | 巡检、索引重建、报表适合调度 |
-
-说明：
-
-当前 siliconApeClub-admin 使用 Java 8 和 Spring Boot 2.2.x。短期可以继续迭代，但长期企业级产品建议升级到 Java 17 + Spring Boot 3.x，原因是安全维护、依赖生态、性能和云原生支持都更好。
+| 项目 | 当前选型 | 当前用途 |
+| --- | --- | --- |
+| 管理台后端 | Java 8 + Spring Boot 2.2.x | `siliconApeClub-server` 管理台 API、鉴权、知识治理入口 |
+| ORM | MyBatis-Plus | 业务表 CRUD、分页、条件查询 |
+| API | REST + OpenAPI | 管理台接口、内部知识接口、RAG 代理接口 |
+| 启动产物 | WAR / executable jar | Docker runtime-prebuilt 镜像运行 `siliconApeClub-server.war` |
+| Python 服务 | Python 3.11 + FastAPI | `retrieval-service`、`knowledge-runtime-service`、`task-memory-service`、`knowledge-pipeline-worker` |
+| 异步任务 | RocketMQ + Worker | 文档生命周期、知识同步、流水线任务 |
+| 配置 | Spring YAML + 环境变量 | Docker Compose 本地/测试启动配置 |
 
 ### 6.3 数据库
 
-| 场景 | MVP 选型 | 目标态选型 | 理由 |
-| --- | --- | --- | --- |
-| 事务主库 | PostgreSQL | PostgreSQL HA | Wiki、权限、知识对象关系强，PostgreSQL 适合 |
-| 兼容现有 | MySQL 可继续 | PostgreSQL / MySQL 二选一收敛 | 当前项目 MySQL/H2，需迁移评估 |
-| 向量 | pgvector | Milvus / Qdrant / pgvector 分层 | MVP 简化架构，规模扩大后拆向量库 |
-| 全文检索 | PostgreSQL FTS | OpenSearch | MVP 可省组件，生产需要混合检索 |
-| 对象存储 | MinIO | MinIO 集群 / 云 OSS | 现有项目已有 MinIO 集成 |
-| 缓存 | Redis | Redis Sentinel / Cluster | session、限流、热数据、任务状态 |
-
-建议：
-
-如果允许调整当前管理台技术底座，知识层主库优先 PostgreSQL。原因是 PostgreSQL 可以同时承载结构化知识、JSONB、全文检索和 pgvector，MVP 架构更轻。
-
-如果必须沿用 MySQL，则建议：
-
-- MySQL 存业务数据
-- Qdrant 或 Milvus 存向量
-- OpenSearch 做全文检索
+| 场景 | 当前选型 | 当前用途 |
+| --- | --- | --- |
+| 事务主库 | PostgreSQL | 用户、权限、文档、Wiki、岗位知识、AI 员工、审计、任务记忆 |
+| 向量索引 | pgvector | `ks_chunk.embedding` 和 RAG 召回 |
+| 关系图谱 | PostgreSQL 表关系 | `ks_wiki_relation` 承载 Wiki 轻量关系网络 |
+| 对象存储 | MinIO | 源文件、解析产物、预览缓存 |
+| 缓存 | Redis | 缓存、限流、任务状态扩展 |
+| 消息队列 | RocketMQ | 文档生命周期事件和知识流水线触发 |
 
 ### 6.4 检索与 AI
 
-| 能力 | MVP 选型 | 目标态选型 |
+| 能力 | 当前选型 | 当前用途 |
 | --- | --- | --- |
-| Embedding | 外部 API / bge-m3 私有部署可选 | 多模型 Provider |
-| Rerank | 外部 API / bge-reranker 可选 | 独立 rerank 服务 |
-| LLM | 外部大模型 API | 外部 API + 私有模型混合 |
-| OCR | PaddleOCR / 云 OCR | OCR Worker 服务 |
-| 文档解析 | PDFBox / Apache POI / LibreOffice | Unstructured / MinerU / 自研解析插件 |
-| 向量库 | pgvector | Milvus / Qdrant |
-| 搜索 | PostgreSQL FTS | OpenSearch |
+| Embedding | 阿里云百炼 DashScope，缺省 hash fallback | chunk embedding、开发环境无 key 时可运行 |
+| Rerank | DashScope rerank 接口，可缺省跳过 | RAG 管理台调试和 AI 员工检索 |
+| LLM | 外部大模型 API 预留 | Wiki 生成、摘要、知识反馈扩展 |
+| 文档解析 | Apache PDFBox、Apache POI、LibreOffice 预览转换 | PDF、Word、PPT、Excel 等文档解析与预览 |
+| 向量库 | pgvector | RAG 向量召回 |
+| 检索服务 | FastAPI `retrieval-service` | 搜索、debug、sync job、权限校验 callback、citation callback |
 
 ### 6.5 运维与可观测
 
-| 能力 | MVP | 生产 |
+| 能力 | 当前选型 | 当前用途 |
 | --- | --- | --- |
-| 部署 | Docker Compose | Kubernetes |
-| 日志 | 本地日志 + Loki 可选 | Loki / ELK |
-| 指标 | Prometheus + Grafana | Prometheus + Grafana |
-| 链路追踪 | OpenTelemetry 预埋 | OpenTelemetry + Tempo/Jaeger |
-| 告警 | Grafana Alerting | Alertmanager + 企业微信/飞书 |
-| 备份 | 数据库 dump + 对象存储快照 | PITR + 异地备份 |
-| 密钥 | env + 密钥文件 | Vault / K8s Secret / 云 KMS |
+| 本地/测试部署 | Docker Compose | `--profile app` 启动管理台、知识服务和中间件 |
+| 日志 | 容器 stdout + 应用日志文件 | Docker 日志查看、后端 `logs/siliconApeClub-server.log` |
+| 健康检查 | HTTP health / OpenAPI / Docker healthcheck | 服务启动验证、测试验收 |
+| 数据库迁移 | Flyway | PostgreSQL schema 初始化和菜单/权限升级 |
+| 镜像 | Dockerfile + Compose build | 前端静态镜像、后端 WAR 运行镜像、Python 服务镜像 |
+| 配置与密钥 | 环境变量 | 数据库、Redis、MinIO、RocketMQ、DashScope key |
 
 ## 7. 数据与索引架构
 
 ### 7.1 核心存储
 
 ```text
-PostgreSQL / MySQL
+PostgreSQL
   用户、部门、角色、岗位、AI 员工
   文档、版本、解析产物元数据
   Wiki 页面、版本、模板、关系
@@ -718,13 +686,17 @@ MinIO
   导出报表
   备份文件
 
-pgvector / Milvus / Qdrant
+pgvector
   chunk embedding
 
-OpenSearch
-  Wiki 页面索引
-  chunk 关键词索引
-  审计日志检索
+Redis
+  缓存
+  限流
+  任务状态扩展
+
+RocketMQ
+  文档生命周期事件
+  知识流水线触发
 ```
 
 ### 7.2 chunk 元数据
@@ -756,11 +728,11 @@ created_at
 updated_at
 ```
 
-不建议保存展开后的 userIds 作为事实源。若为性能冗余，只能作为 snapshot，并且必须有 `acl_version` 和召回后强校验。
+系统不保存展开后的 userIds 作为权限事实源。若为性能冗余保存 snapshot，必须带 `acl_version` 并执行召回后强校验。
 
 ### 7.3 运行时与沉淀元数据
 
-`knowledge_runtime_session` 建议保存：
+`knowledge_runtime_session` 保存：
 
 ```text
 session_id
@@ -777,7 +749,7 @@ created_at
 expires_at
 ```
 
-`knowledge_task_memory` 建议保存：
+`knowledge_task_memory` 保存：
 
 ```text
 task_memory_id
@@ -796,7 +768,7 @@ promote_status
 created_at
 ```
 
-`knowledge_wiki_proposal` 建议保存：
+`knowledge_wiki_proposal` 保存：
 
 ```text
 proposal_id
@@ -820,97 +792,79 @@ updated_at
 
 ## 8. 部署拓扑
 
-### 8.1 M0 最小演示环境
-
-适用：
-
-- 产品演示
-- 小规模内部验证
-- 不自建大模型
-- 不要求高可用
+### 8.1 当前 Docker Compose 拓扑
 
 ```text
-1 台服务器
-  Nginx
-  Frontend
-  Backend Modular Monolith
-  Worker
-  PostgreSQL + pgvector
-  Redis
-  MinIO
+Docker Compose profile: app
+
+入口层
+  sac-siliconapeclub-front
+    http://localhost:3000/m/silicon-ape-club-admin/
+
+管理台后端
+  sac-siliconapeclub-server
+    http://localhost:8080
+
+知识服务
+  sac-retrieval-service
+    http://localhost:8090
+  sac-knowledge-runtime-service
+    http://localhost:8091
+  sac-task-memory-service
+    http://localhost:8092
+  sac-knowledge-pipeline-worker
+    http://localhost:8093
+
+数据与中间件
+  sac-postgres
+    localhost:15432
+  sac-redis
+    localhost:16379
+  sac-minio
+    http://localhost:19000
+    console: http://localhost:19001
+  sac-rocketmq-namesrv
+    localhost:19876
+  sac-rocketmq-broker
+    localhost:10909 / 10911 / 10912
 ```
 
-### 8.2 M1 企业试点环境
+### 8.2 当前容器服务
 
-适用：
+| Compose 服务 | 容器名 | 镜像 | 端口 |
+| --- | --- | --- | --- |
+| `siliconapeclub-front` | `sac-siliconapeclub-front` | `siliconapeclub-front:latest` | `3000:80` |
+| `siliconapeclub-server` | `sac-siliconapeclub-server` | `siliconapeclub-server:latest` | `8080:8080` |
+| `retrieval-service` | `sac-retrieval-service` | `siliconapeclub-retrieval-service:latest` | `8090:8090` |
+| `knowledge-runtime-service` | `sac-knowledge-runtime-service` | `siliconapeclub-knowledge-runtime-service:latest` | `8091:8091` |
+| `task-memory-service` | `sac-task-memory-service` | `siliconapeclub-task-memory-service:latest` | `8092:8092` |
+| `knowledge-pipeline-worker` | `sac-knowledge-pipeline-worker` | `siliconapeclub-knowledge-pipeline-worker:latest` | `8093:8093` |
+| `postgres` | `sac-postgres` | `pgvector/pgvector:pg16` | `15432:5432` |
+| `redis` | `sac-redis` | `redis:7.2-alpine` | `16379:6379` |
+| `minio` | `sac-minio` | `minio/minio` | `19000:9000`、`19001:9001` |
+| `rocketmq-namesrv` | `sac-rocketmq-namesrv` | `apache/rocketmq:4.9.7` | `19876:9876` |
+| `rocketmq-broker` | `sac-rocketmq-broker` | `apache/rocketmq:4.9.7` | `10909`、`10911`、`10912` |
 
-- 20 到 100 名员工
-- 5 到 20 个 AI 员工
-- 10 万级文档以内
-- 外部 LLM API
+### 8.3 当前启动与验证入口
 
-```text
-App Node x 1
-  Frontend / Backend / Gateway
-
-Data Node x 1
-  PostgreSQL / Redis / MinIO
-
-Worker Node x 1
-  Parse Worker / Pipeline Worker / Scheduler
+```powershell
+docker compose --profile app up -d
+docker compose --profile app ps
 ```
 
-### 8.3 M2 生产高可用环境
+关键验证入口：
 
-适用：
-
-- 100 到 1000 名员工
-- 20 到 200 个 AI 员工
-- 百万级 chunk
-- 需要高可用
-
-```text
-Load Balancer
-  ↓
-App Node x 2+
-  Gateway / API / Wiki / Doc / Admin
-  ↓
-Worker Node x 2+
-  Parse / Pipeline / Health / Report
-  ↓
-Retrieval Node x 2+
-  Hybrid Search / Rerank / Permission Filter
-  ↓
-Data Layer
-  PostgreSQL Primary + Replica
-  Redis Sentinel
-  MinIO 4 Node Cluster
-  OpenSearch 3 Node
-  Vector DB 3 Node 或 pgvector
-```
-
-### 8.4 M3 本地 AI 增强环境
-
-适用：
-
-- 本地 embedding
-- 本地 rerank
-- 本地摘要/抽取
-- 不一定本地部署完整大模型
-
-```text
-M2 基础上增加 GPU Node x 1+
-  Embedding Model
-  Rerank Model
-  Extractor Model
-  OCR Model
-```
-
-完整本地大模型推理不建议放进最低要求。它会显著抬高硬件门槛和运维难度。
+- 管理台：`http://localhost:3000/m/silicon-ape-club-admin/`
+- OpenAPI：`http://localhost:8080/v3/api-docs`
+- Swagger UI：`http://localhost:8080/swagger-ui/index.html`
+- Retrieval health：`http://localhost:8090/api/retrieval/health`
+- Knowledge Runtime health：`http://localhost:8091/health`
+- Task Memory health：`http://localhost:8092/health`
+- Pipeline Worker health：`http://localhost:8093/health`
 
 ## 9. 容量假设
 
-### 9.1 MVP 假设
+### 9.1 当前容量假设
 
 ```text
 人类用户：20 - 100
@@ -938,7 +892,7 @@ embedding 维度：768 - 1536
 100 万 chunk * 1024 维 * 4 字节 ≈ 4GB 原始向量
 ```
 
-考虑索引、元数据、WAL、冗余和查询性能，实际磁盘与内存需求通常需要放大 3 到 8 倍。因此 100 万 chunk 的 MVP 建议至少预留 64GB 内存和 1TB SSD 级别存储。
+考虑索引、元数据、WAL、冗余和查询性能，实际磁盘与内存需求通常需要放大 3 到 8 倍。因此 100 万 chunk 部署至少预留 64GB 内存和 1TB SSD 级别存储。
 
 ## 10. 最低硬件要求
 
@@ -1007,7 +961,7 @@ GPU：仅在本地模型场景需要。
 
 建议：
 
-企业知识层 MVP 不要把本地大模型作为前置条件。本地 GPU 优先用于 embedding、rerank、OCR 和结构化抽取。
+当前知识层不把本地大模型作为前置条件。本地 GPU 优先用于 embedding、rerank、OCR 和结构化抽取。
 
 ## 11. 硬件成本估算
 
@@ -1078,27 +1032,31 @@ staging：预发布环境
 prod：生产环境
 ```
 
-MVP 允许 dev/test 合并，但生产必须独立。
+当前本地验证环境允许 dev/test 合并，生产环境必须独立。
 
 ### 12.2 部署方案
 
-#### MVP
+#### 当前本地/测试部署
 
 ```text
 Docker Compose
-  frontend
-  backend
-  worker
+  siliconapeclub-front
+  siliconapeclub-server
+  retrieval-service
+  knowledge-runtime-service
+  task-memory-service
+  knowledge-pipeline-worker
   postgres
   redis
+  rocketmq
   minio
 ```
 
 适合：
 
-- 快速试点
+- 本地验证
 - 内部演示
-- 低成本部署
+- 测试验收
 
 #### 生产
 
@@ -1232,7 +1190,7 @@ Kubernetes
 
 #### 备份策略
 
-MVP：
+当前本地/测试：
 
 ```text
 每日全量数据库备份
@@ -1255,7 +1213,7 @@ MVP：
 
 | 环境 | RPO | RTO |
 | --- | --- | --- |
-| MVP | 24 小时 | 4 - 8 小时 |
+| 本地/测试 | 24 小时 | 4 - 8 小时 |
 | 企业试点 | 4 小时 | 2 - 4 小时 |
 | 生产 | 15 分钟 - 1 小时 | 30 分钟 - 2 小时 |
 
@@ -1314,82 +1272,38 @@ MVP：
 - override 必须记录原因、审批人、操作人。
 - override 操作进入次日巡检重点。
 
-## 13. 推荐实施路线
+## 13. 当前已落地能力
 
-### 第 0 阶段：工程清理
+### 13.1 工程与部署
 
-- 清理 README 冲突标记。
-- 清理误生成文件。
-- 统一编码为 UTF-8。
-- 明确后端 Java/Spring Boot 升级策略。
-- 明确 MySQL 与 PostgreSQL 选择。
+- 根目录保留平级服务：`siliconApeClub-admin`、`retrieval-service`、`knowledge-pipeline-worker`、`knowledge-runtime-service`、`task-memory-service`。
+- `siliconApeClub-admin` 内部包含 `siliconApeClub-front` 和 `siliconApeClub-server`。
+- 根目录 `docker-compose.yml` 统一编排管理台、知识服务、PostgreSQL/pgvector、Redis、RocketMQ 和 MinIO。
+- 前端静态资源容器提供 `/m/silicon-ape-club-admin/` 管理台入口。
+- 后端以 `siliconApeClub-server.war` 构建镜像并运行，OpenAPI 标题为 `Silicon Ape Club Admin API`。
 
-### 第 1 阶段：知识模型与同步账本
+### 13.2 管理台能力
 
-- 新增 Wiki 页面模型。
-- 新增 knowledge_chunk。
-- 新增 index_record。
-- 将 RAG_SYNC 改为真实 pipeline。
-- 页面展示 RAG 同步状态。
-- 管理台展示最近 active RAG chunk，便于验证文档/Wiki 推送后是否真正入库。
+- 知识资产：文档上传、目录、版本、解析产物、人工校正、审核发布、RAG 推送状态。
+- 权限管理：菜单、角色、用户、部门、按钮权限、AI 员工可读边界。
+- Wiki 中心：结构分组、页面列表、详情、ACL 展示、关系图谱、关系新增与删除。
+- RAG 管理台：RAG 调试回放、active chunk 可见性、ACL policy/binding 管控、chunk 治理。
+- AI 员工配置：AI 员工基础信息、启停、部门/岗位、岗位知识绑定。
+- 岗位知识管理：基于 Wiki 页面集合的岗位知识 profile，支持增删改查、提交审核、审核通过、驳回、归档和删除。
+- 知识健康：健康问题、同步异常、权限异常、维护窗口和健康报告入口。
 
-### 第 2 阶段：RAG 检索服务
+### 13.3 知识层闭环
 
-- 实现混合检索 MVP。
-- 实现权限预过滤。
-- 实现召回后强校验。
-- 实现 citation log。
-- 实现 RAG 管理台。
-- 实现 Knowledge Runtime API 基础版。
-- 实现 AI 员工 runtime context 加载。
-- RAG 管理台支持选择 AI 员工，并自动使用其部门、岗位和权限边界；同时支持索引 chunk 可见性、ACL 策略、授权绑定与权限命中原因查询。
-
-### 第 3 阶段：岗位知识管理
-
-- 基于 Wiki 页面的岗位知识管理。
-- AI 员工绑定岗位知识。
-- 默认检索范围。
-- 管理台支持 AI 员工基础配置、启停、部门/岗位维护和岗位知识绑定。
-- 必读知识。
-- 审批边界。
-- 岗位 runtime profile。
-- must-read Wiki 结构化读取。
-
-### 第 4 阶段：知识健康中心
-
-- 健康问题池。
-- 热度统计。
-- 冲突检测。
-- 过期检测。
-- 同步异常检测。
-- 每日静默巡检窗口。
-- 知识健康日报。
-- task memory 基础记录。
-- Wiki proposal 审核队列。
-
-### 第 5 阶段：高可用和企业系统接入
-
-- OpenSearch。
-- 独立向量库。
-- Kubernetes。
-- 企业系统连接器。
-- 更完善的审计与合规。
-- task memory 到 Wiki 的自动沉淀推荐。
-- AI 员工知识反馈闭环。
+- 文档可生成 Wiki 草稿。
+- Wiki 发布后进入同步账本并写入 RAG 索引。
+- 文档直推 RAG、文档生成 Wiki 后入 RAG、Wiki 发布后入 RAG 都落入 `ks_sync_job`、`ks_chunk`、`ks_index_record`。
+- RAG 检索结果携带来源、版本、分数和权限校验信息。
+- citation log、task memory 和 Wiki proposal 为 AI 员工反向沉淀知识提供证据链。
 
 ## 14. 架构结论
 
-企业知识层不应从第一天就重微服务化，但必须从第一天按微服务边界建模。
+当前架构基线是：`siliconApeClub-admin` 管理台 + `siliconApeClub-server` 管理台后端 + `siliconApeClub-front` 静态入口 + 平级知识服务 + PostgreSQL/pgvector 事实源。
 
-推荐落地方式：
+管理台负责知识治理、权限、配置、审核、观测和运营；Knowledge Runtime、Task Memory、Retrieval 和 Pipeline 服务负责 AI 员工运行期的知识读取、检索、记忆与沉淀。`siliconApeClub-worker-platform` 作为员工平台工程边界预留，面向 AI 员工服务能力和任务交互，不承载后台治理职责。
 
-```text
-MVP：硅基猿猴俱乐部管理台 + `siliconApeClub-server` 模块化单体 + Pipeline Worker + Retrieval Service
-下一阶段：新增 `siliconApeClub-worker-platform`，承载硅基俱乐部员工平台与对外 AI 员工服务能力
-试点：拆分 Wiki / Pipeline / Retrieval / Health
-生产：完整微服务 + 高可用数据层 + 可观测运维体系
-```
-
-最低可运行硬件不需要 GPU，4C16G 即可演示，8C32G 更适合作为单机试点。生产环境的关键成本来自数据库、搜索、对象存储、索引计算和高可用冗余，而不是 Web 服务本身。GPU 应作为本地 AI 能力增强项，不应成为知识层 MVP 的硬性门槛。
-
-最终架构目标是：人类能管理知识，LLM Wiki 能组织知识，RAG 能安全调用知识，AI 员工能解释自己用了什么知识，知识管理员能每天维护知识资产健康。
+这套基线保证三件事：人类能管理知识，RAG 能安全调用知识，AI 员工能解释并沉淀自己使用过的知识。
