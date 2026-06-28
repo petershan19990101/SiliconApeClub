@@ -45,6 +45,8 @@ function AppContent() {
         return <RagDebug />;
       case 'ai_employees':
         return <AiEmployees />;
+      case 'customer_members':
+        return <AiEmployees defaultSection="customers" />;
       case 'settings':
         return <SystemSettings />;
       case 'help':

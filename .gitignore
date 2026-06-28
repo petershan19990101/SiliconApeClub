@@ -18,3 +18,7 @@ docspace-server/logs/
 
 **/__pycache__/
 *.pyc
+
+# Worker platform local frontend artifacts.
+/siliconApeClub-worker-front/node_modules/
+/siliconApeClub-worker-front/dist/

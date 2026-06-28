@@ -366,3 +366,61 @@ PLEASE IMPLEMENT THIS PLAN:
 - 14 章结论改为当前架构基线说明，明确 `siliconApeClub-admin` 与预留的 `siliconApeClub-worker-platform` 边界。
 
 本轮仅修改架构文档和对话记录，未改动代码。
+
+### User
+
+PLEASE IMPLEMENT THIS PLAN：实现 AI 员工平台组织化交付方案。补充要求：客户端需要分组管理客户历史需求、聊天记录，后端也要按这个结构存储；平台本质是模拟一家公司，前台接受任务指令后按组织关系拆分给各团队；统一初始化业务前台角色；外部客户默认由业务前台接待，内部人员可按权限查看组织关系、派活或咨询员工；客户端只与 `siliconApeClub-worker-platform` 交互，不能直连 Knowledge Runtime、Task Memory、Retrieval。
+
+### Assistant
+
+本轮完成 AI 员工平台第一版闭环实现：
+
+- 清理错误方向残留的半成品 `siliconApeClub-worker-platform` 目录，确认内部知识服务不继续增加浏览器直连入口。
+- 新增根目录平级工程 `siliconApeClub-worker-platform`，定位为硅基猿猴俱乐部 AI 员工工作核心。
+- 后端采用 Python 3.11 + FastAPI，启动时自动初始化 `wp_*` 表：客户身份、组织单元、AI 员工、组织关系、员工权限、需求组、会话、消息、任务账本、任务事件、checkpoint、协作线程、Skill、产出物和候选 Wiki。
+- 内置种子组织：硅基猿猴俱乐部、业务前台、知识运营部、RAG 支持组、任务交付组；内置 AI 员工：业务前台 Ada、知识运营 Lin、RAG 支持 Kai、任务执行 Mo。
+- 内置种子账号：`customer/Customer@123`、`internal/Internal@123`、`admin/Admin@123`。
+- 实现 `/api/worker-platform/**` 统一客户端接口：登录、me、bootstrap、需求组、会话、消息、组织员工、员工 skills、员工咨询、员工派活、任务列表、任务详情、恢复、取消、转派、审核、候选 Wiki。
+- 客户端只访问 worker platform；Knowledge Runtime、Task Memory、Retrieval、管理台后端均作为服务端内部依赖记录在 `/health` 中，不暴露给浏览器。
+- 前端采用 React + Vite + TypeScript，提供 AI 员工需求工作台：左侧客户历史需求组，中间聊天与多模态 block，右侧组织员工与任务账本。
+- 消息 block 支持 `markdown`、`html`、`form`、`artifact`、`task_status`、`org_route`、`employee_card`、`handoff`；精准数据通过 `form` block 提交，HTML 仅做受控展示。
+- Docker Compose 新增 `siliconapeclub-worker-platform` 服务，容器名 `sac-siliconapeclub-worker-platform`，端口 `3010:3010`。
+- 更新 `ARCHITECTURE.md`：当前架构基线改为管理台 + AI 员工平台 + 平级知识服务，worker platform 是唯一客户端运行期入口。
+- 更新 `PRD.md`：补充 AI 员工平台第一版目标、外部客户、内部人员、业务前台、需求组、消息 block、任务账本和组织化派发流程。
+- 更新 `guide.md`：补充 AI 员工平台入口、账号、操作流程、权限说明、数据库 check、冒烟检查和常见问题。
+- 验证通过：后端 Python 导入检查、前端 `npm run typecheck`、`npm run build`、Docker 镜像构建、容器启动、`/health`、外部客户登录建需求、会话消息、多 block 响应、RAG 需求自动派发、外部客户组织接口 403、内部人员组织员工列表、任务恢复和 PostgreSQL `wp_*` 表计数。
+
+### User
+
+接下来先在工程层面把 `siliconApeClub-worker-platform` 前后端分开，后端依然命名为 `siliconApeClub-worker-platform`，前端命名为 `siliconApeClub-worker-front`。后续实现需求时也要从架构设计角度质疑需求合理性，而不是直接听命而行。
+
+### Assistant
+
+本轮完成 AI 员工平台前后端工程拆分：
+
+- 将原 `siliconApeClub-worker-platform/web` 拆出为根目录平级工程 `siliconApeClub-worker-front`。
+- `siliconApeClub-worker-platform` 保留为后端工程，只承载 FastAPI 运行期 API、组织编排、任务账本和内部知识服务调用，不再构建或托管前端静态资源。
+- `siliconApeClub-worker-front` 保留 React + Vite + TypeScript 前端代码，新增独立 Dockerfile、`.dockerignore`、`nginx.conf` 和 README。
+- 前端 Docker 镜像使用 Nginx 托管静态资源，并将 `/api/worker-platform/**` 反向代理到 `siliconapeclub-worker-platform:3010`，保持浏览器不直连 Knowledge Runtime、Task Memory、Retrieval。
+- Docker Compose 新增 `siliconapeclub-worker-front` 服务，容器名 `sac-siliconapeclub-worker-front`，端口 `3011:80`；后端 `siliconapeclub-worker-platform` 继续使用 `3010:3010`。
+- 更新 `.gitignore`，忽略 `siliconApeClub-worker-front/node_modules` 和 `dist`。
+- 更新 `ARCHITECTURE.md`、`PRD.md`、`guide.md`：明确用户入口为 `siliconApeClub-worker-front`，业务 API 由 `siliconApeClub-worker-platform` 提供，知识服务仍是后端内部依赖。
+- 验证通过：后端 `python -m compileall`、前端 `npm run typecheck`、前端 `npm run build`、两个 Docker 镜像构建、两个容器启动、`http://localhost:3011` 页面 200、`http://localhost:3011/worker-api-health` 代理后端健康检查、通过 `http://localhost:3011/api/worker-platform/auth/login` 登录并查询内部员工列表。
+
+### User
+
+管理后台的 AI 员工配置与客户端的组织与任务部分员工数据没有打通，需要把管理端 AI 员工配置升级为组织与人力中心，支持公司组织、角色、员工、职责、技能、岗位知识包、联系人关系、个人记忆、模型配置、成本基线，并搭建客户会员中心维护客户角色、客户可见部门和可见人员；同时按业务战略部、客户服务部、市场部、科技部等规划初始化组织架构。
+
+### Assistant
+
+本轮完成组织与人力中心、客户会员中心和 worker platform 运行时投影闭环：
+
+- 管理台新增 Flyway V7，扩展 `ds_department`、`ds_ai_employee`，新增 `hr_role`、`hr_employee_role`、`hr_employee_contact_relation`、`hr_model_profile`、`customer_member`、`customer_role`、`customer_role_binding`、`customer_department_visibility`、`customer_employee_visibility`。
+- 初始化公司组织：硅基猿猴俱乐部、业务战略部、客户服务部、市场部、科技部、研发中心、公共研发战队、运维中心、安全中心；初始化战略师、研究员、客服、市场产品经理、CTO、研发负责人、战队队长、研发、运维和安全等 AI 员工。
+- 管理台后端新增 `/api/admin/org-human-center` 概览接口和 `/api/admin/org-human-center/customers/{id}/visibility` 客户可见性保存接口；AI 员工创建/编辑接口补充职责、技能、联系人关系、记忆策略、模型配置、HR 角色、直属上级、成本和绩效状态字段。
+- 管理台前端将原 AI 员工配置升级为 `组织与人力中心`，新增组织树、员工配置、岗位知识绑定、联系人关系、客户会员、客户角色、客户可见部门/员工、可咨询/可派活配置；侧边栏新增 `客户会员中心` 入口。
+- Worker Platform 启动时从管理台 `ds_*`、`hr_*`、`customer_*` 表投影到 `wp_org_unit`、`wp_ai_employee`、`wp_org_relation`、`wp_employee_permission`，管理台成为权威配置源，worker 的 `wp_*` 表只作为运行时投影。
+- 外部客户不再简单固定 403，而是只能看到客户会员中心授权的部门和员工；内部人员和管理员继续按 `wp_employee_permission` 查看组织、咨询和派活。
+- 派发逻辑从旧 demo 员工升级为优先路由到业务战略部、市场部/产品经理、科技部研发中心、客户服务部。
+- 已同步更新 `ARCHITECTURE.md`、`PRD.md`、`guide.md`，明确组织与人力中心、客户会员中心、worker 投影和客户可见性边界。
+- 后续执行需求时，将先判断产品/架构边界是否合理，再决定实现方式；如果需求会破坏边界，会先指出风险并给出替代方案。

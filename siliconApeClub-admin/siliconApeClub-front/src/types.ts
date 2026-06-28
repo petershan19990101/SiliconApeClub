@@ -107,8 +107,13 @@ export interface AdminUser {
 
 export interface AdminDepartment {
   id: string;
+  code?: string;
   parentId?: string;
   name: string;
+  unitType?: string;
+  description?: string;
+  sortOrder?: number;
+  enabled?: boolean;
   children: AdminDepartment[];
 }
 
@@ -353,6 +358,7 @@ export type View =
   | 'knowledge_health'
   | 'rag_debug'
   | 'ai_employees'
+  | 'customer_members'
   | 'settings'
   | 'help';
 
@@ -446,9 +452,91 @@ export interface AiEmployee {
   description?: string;
   positionCode?: string;
   departmentId?: string;
+  departmentName?: string;
+  roleTitle?: string;
+  responsibilities?: string;
+  skillsJson?: string;
+  contactRelationsJson?: string;
+  memoryPolicyJson?: string;
+  modelConfigJson?: string;
+  hrRoleCode?: string;
+  managerEmployeeId?: string;
+  managerName?: string;
+  employmentType?: string;
+  costRate?: number;
+  performanceStatus?: string;
   enabled: boolean;
   status: string;
   packages?: PositionPackage[];
+  contacts?: EmployeeContactRelation[];
+}
+
+export interface EmployeeContactRelation {
+  id: string;
+  aiEmployeeId: string;
+  relatedEmployeeId: string;
+  relatedEmployeeName?: string;
+  relatedRoleTitle?: string;
+  relationType: string;
+  description?: string;
+}
+
+export interface HrRole {
+  id: string;
+  code: string;
+  name: string;
+  description?: string;
+  permissionsJson?: string;
+  enabled: boolean;
+}
+
+export interface ModelProfile {
+  id: string;
+  code: string;
+  name: string;
+  provider: string;
+  modelName: string;
+  purpose?: string;
+  configJson?: string;
+  enabled: boolean;
+}
+
+export interface CustomerMember {
+  id: string;
+  code: string;
+  name: string;
+  customerType: string;
+  principalCode?: string;
+  contactName?: string;
+  contactEmail?: string;
+  status: string;
+  metadataJson?: string;
+}
+
+export interface CustomerVisibility {
+  id: string;
+  customerId: string;
+  customerName?: string;
+  departmentId?: string;
+  departmentName?: string;
+  aiEmployeeId?: string;
+  employeeName?: string;
+  roleTitle?: string;
+  visibilityType: string;
+  canConsult?: boolean;
+  canAssign?: boolean;
+}
+
+export interface OrgHumanCenterOverview {
+  departments: AdminDepartment[];
+  positions: Array<Record<string, unknown>>;
+  roles: HrRole[];
+  modelProfiles: ModelProfile[];
+  employees: AiEmployee[];
+  customers: CustomerMember[];
+  customerRoles: HrRole[];
+  customerDepartmentVisibility: CustomerVisibility[];
+  customerEmployeeVisibility: CustomerVisibility[];
 }
 
 export interface IndexedChunk {

@@ -27,7 +27,8 @@ const FALLBACK_MENUS: SystemMenuNode[] = [
   { id: 'position_packages', code: 'position_knowledge.view', name: '岗位知识管理', type: 'page', routeKey: 'position_packages', icon: 'briefcase', sortOrder: 50, enabled: true, children: [] },
   { id: 'knowledge_health', code: 'knowledge_health.view', name: '知识运营健康', type: 'page', routeKey: 'knowledge_health', icon: 'activity', sortOrder: 55, enabled: true, children: [] },
   { id: 'rag_debug', code: 'rag_management.view', name: 'RAG 管理台', type: 'page', routeKey: 'rag_debug', icon: 'search', sortOrder: 60, enabled: true, children: [] },
-  { id: 'ai_employees', code: 'ai_employee.view', name: 'AI 员工配置', type: 'page', routeKey: 'ai_employees', icon: 'users', sortOrder: 65, enabled: true, children: [] },
+  { id: 'ai_employees', code: 'organization_hr.view', name: '组织与人力中心', type: 'page', routeKey: 'ai_employees', icon: 'users', sortOrder: 65, enabled: true, children: [] },
+  { id: 'customer_members', code: 'customer_member.view', name: '客户会员中心', type: 'page', routeKey: 'customer_members', icon: 'users', sortOrder: 68, enabled: true, children: [] },
   { id: 'settings', code: 'settings.view', name: '系统设置', type: 'page', routeKey: 'settings', icon: 'settings', sortOrder: 90, enabled: true, children: [] },
   { id: 'help', code: 'help.view', name: '帮助中心', type: 'page', routeKey: 'help', icon: 'help', sortOrder: 100, enabled: true, children: [] },
 ];

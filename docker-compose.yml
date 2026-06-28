@@ -222,6 +222,57 @@ services:
     ports:
       - "8092:8092"
 
+  siliconapeclub-worker-platform:
+    profiles: ["app"]
+    image: siliconapeclub-worker-platform:${SILICONAPECLUB_WORKER_PLATFORM_IMAGE_TAG:-latest}
+    build:
+      context: ./siliconApeClub-worker-platform
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-docker.m.daocloud.io/library/python:3.11-slim}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}
+    container_name: sac-siliconapeclub-worker-platform
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      siliconapeclub-server:
+        condition: service_started
+      retrieval-service:
+        condition: service_started
+      knowledge-runtime-service:
+        condition: service_started
+      task-memory-service:
+        condition: service_started
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: docspace
+      POSTGRES_USERNAME: docspace
+      POSTGRES_PASSWORD: docspace123
+      SILICONAPECLUB_SERVER_BASE_URL: http://siliconapeclub-server:8080
+      RETRIEVAL_BASE_URL: http://retrieval-service:8090
+      KNOWLEDGE_RUNTIME_BASE_URL: http://knowledge-runtime-service:8091
+      TASK_MEMORY_BASE_URL: http://task-memory-service:8092
+      WORKER_PLATFORM_AUTH_SECRET: ${WORKER_PLATFORM_AUTH_SECRET:-silicon-ape-club-worker-dev-secret}
+    ports:
+      - "3010:3010"
+
+  siliconapeclub-worker-front:
+    profiles: ["app"]
+    image: siliconapeclub-worker-front:${SILICONAPECLUB_WORKER_FRONT_IMAGE_TAG:-latest}
+    build:
+      context: ./siliconApeClub-worker-front
+      args:
+        NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:-docker.m.daocloud.io/library/node:22-alpine}
+        NGINX_BASE_IMAGE: ${NGINX_BASE_IMAGE:-docker.m.daocloud.io/library/nginx:1.27-alpine}
+    container_name: sac-siliconapeclub-worker-front
+    restart: unless-stopped
+    depends_on:
+      siliconapeclub-worker-platform:
+        condition: service_started
+    ports:
+      - "3011:80"
+
 volumes:
   sac-postgres-data:
   sac-redis-data:

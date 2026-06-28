@@ -1,8 +1,15 @@
 import {
+  AdminDepartment,
   AiEmployee,
+  CustomerMember,
+  CustomerVisibility,
+  EmployeeContactRelation,
   HealthIssue,
   HealthReport,
+  HrRole,
   IndexedChunk,
+  ModelProfile,
+  OrgHumanCenterOverview,
   PositionKnowledgeItem,
   PositionPackage,
   RagAclBinding,
@@ -79,9 +86,103 @@ function normalizeAiEmployee(item: Record<string, unknown>): AiEmployee {
     description: item.description == null ? undefined : String(item.description),
     positionCode: item.positionCode == null ? undefined : String(item.positionCode),
     departmentId: item.departmentId == null ? undefined : String(item.departmentId),
+    departmentName: item.departmentName == null ? undefined : String(item.departmentName),
+    roleTitle: item.roleTitle == null ? undefined : String(item.roleTitle),
+    responsibilities: item.responsibilities == null ? undefined : String(item.responsibilities),
+    skillsJson: item.skillsJson == null ? undefined : String(item.skillsJson),
+    contactRelationsJson: item.contactRelationsJson == null ? undefined : String(item.contactRelationsJson),
+    memoryPolicyJson: item.memoryPolicyJson == null ? undefined : String(item.memoryPolicyJson),
+    modelConfigJson: item.modelConfigJson == null ? undefined : String(item.modelConfigJson),
+    hrRoleCode: item.hrRoleCode == null ? undefined : String(item.hrRoleCode),
+    managerEmployeeId: item.managerEmployeeId == null ? undefined : String(item.managerEmployeeId),
+    managerName: item.managerName == null ? undefined : String(item.managerName),
+    employmentType: item.employmentType == null ? undefined : String(item.employmentType),
+    costRate: item.costRate == null ? undefined : Number(item.costRate),
+    performanceStatus: item.performanceStatus == null ? undefined : String(item.performanceStatus),
     enabled: item.enabled === true || item.enabled === 1,
     status: String(item.status ?? ''),
     packages: Array.isArray(item.packages) ? item.packages.map((pkg) => normalizePositionPackage(pkg as Record<string, unknown>)) : undefined,
+    contacts: Array.isArray(item.contacts) ? item.contacts.map((contact) => normalizeEmployeeContact(contact as Record<string, unknown>)) : undefined,
+  };
+}
+
+function normalizeEmployeeContact(item: Record<string, unknown>): EmployeeContactRelation {
+  return {
+    id: String(item.id),
+    aiEmployeeId: String(item.aiEmployeeId ?? ''),
+    relatedEmployeeId: String(item.relatedEmployeeId ?? ''),
+    relatedEmployeeName: item.relatedEmployeeName == null ? undefined : String(item.relatedEmployeeName),
+    relatedRoleTitle: item.relatedRoleTitle == null ? undefined : String(item.relatedRoleTitle),
+    relationType: String(item.relationType ?? ''),
+    description: item.description == null ? undefined : String(item.description),
+  };
+}
+
+function normalizeDepartment(item: Record<string, unknown>): AdminDepartment {
+  return {
+    id: String(item.id),
+    code: item.code == null ? undefined : String(item.code),
+    parentId: item.parentId == null ? undefined : String(item.parentId),
+    name: String(item.name ?? ''),
+    unitType: item.unitType == null ? undefined : String(item.unitType),
+    description: item.description == null ? undefined : String(item.description),
+    sortOrder: item.sortOrder == null ? undefined : Number(item.sortOrder),
+    enabled: item.enabled == null ? undefined : item.enabled === true || item.enabled === 1,
+    children: Array.isArray(item.children) ? item.children.map((child) => normalizeDepartment(child as Record<string, unknown>)) : [],
+  };
+}
+
+function normalizeHrRole(item: Record<string, unknown>): HrRole {
+  return {
+    id: String(item.id),
+    code: String(item.code ?? ''),
+    name: String(item.name ?? ''),
+    description: item.description == null ? undefined : String(item.description),
+    permissionsJson: item.permissionsJson == null ? undefined : String(item.permissionsJson),
+    enabled: item.enabled === true || item.enabled === 1,
+  };
+}
+
+function normalizeModelProfile(item: Record<string, unknown>): ModelProfile {
+  return {
+    id: String(item.id),
+    code: String(item.code ?? ''),
+    name: String(item.name ?? ''),
+    provider: String(item.provider ?? ''),
+    modelName: String(item.modelName ?? ''),
+    purpose: item.purpose == null ? undefined : String(item.purpose),
+    configJson: item.configJson == null ? undefined : String(item.configJson),
+    enabled: item.enabled === true || item.enabled === 1,
+  };
+}
+
+function normalizeCustomerMember(item: Record<string, unknown>): CustomerMember {
+  return {
+    id: String(item.id),
+    code: String(item.code ?? ''),
+    name: String(item.name ?? ''),
+    customerType: String(item.customerType ?? 'external'),
+    principalCode: item.principalCode == null ? undefined : String(item.principalCode),
+    contactName: item.contactName == null ? undefined : String(item.contactName),
+    contactEmail: item.contactEmail == null ? undefined : String(item.contactEmail),
+    status: String(item.status ?? ''),
+    metadataJson: item.metadataJson == null ? undefined : String(item.metadataJson),
+  };
+}
+
+function normalizeCustomerVisibility(item: Record<string, unknown>): CustomerVisibility {
+  return {
+    id: String(item.id),
+    customerId: String(item.customerId ?? ''),
+    customerName: item.customerName == null ? undefined : String(item.customerName),
+    departmentId: item.departmentId == null ? undefined : String(item.departmentId),
+    departmentName: item.departmentName == null ? undefined : String(item.departmentName),
+    aiEmployeeId: item.aiEmployeeId == null ? undefined : String(item.aiEmployeeId),
+    employeeName: item.employeeName == null ? undefined : String(item.employeeName),
+    roleTitle: item.roleTitle == null ? undefined : String(item.roleTitle),
+    visibilityType: String(item.visibilityType ?? 'visible'),
+    canConsult: item.canConsult == null ? undefined : item.canConsult === true || item.canConsult === 1,
+    canAssign: item.canAssign == null ? undefined : item.canAssign === true || item.canAssign === 1,
   };
 }
 
@@ -282,6 +383,48 @@ export const knowledgeApi = {
   listAiEmployees: async () => {
     const data = await request<Array<Record<string, unknown>>>('/api/admin/ai-employees');
     return data.map(normalizeAiEmployee);
+  },
+  getOrgHumanCenter: async (): Promise<OrgHumanCenterOverview> => {
+    const data = await request<Record<string, unknown>>('/api/admin/org-human-center');
+    return {
+      departments: Array.isArray(data.departments) ? data.departments.map((item) => normalizeDepartment(item as Record<string, unknown>)) : [],
+      positions: Array.isArray(data.positions) ? data.positions.map((item) => normalizeRecord(item as Record<string, unknown>)) : [],
+      roles: Array.isArray(data.roles) ? data.roles.map((item) => normalizeHrRole(item as Record<string, unknown>)) : [],
+      modelProfiles: Array.isArray(data.modelProfiles) ? data.modelProfiles.map((item) => normalizeModelProfile(item as Record<string, unknown>)) : [],
+      employees: Array.isArray(data.employees) ? data.employees.map((item) => normalizeAiEmployee(item as Record<string, unknown>)) : [],
+      customers: Array.isArray(data.customers) ? data.customers.map((item) => normalizeCustomerMember(item as Record<string, unknown>)) : [],
+      customerRoles: Array.isArray(data.customerRoles) ? data.customerRoles.map((item) => normalizeHrRole(item as Record<string, unknown>)) : [],
+      customerDepartmentVisibility: Array.isArray(data.customerDepartmentVisibility)
+        ? data.customerDepartmentVisibility.map((item) => normalizeCustomerVisibility(item as Record<string, unknown>))
+        : [],
+      customerEmployeeVisibility: Array.isArray(data.customerEmployeeVisibility)
+        ? data.customerEmployeeVisibility.map((item) => normalizeCustomerVisibility(item as Record<string, unknown>))
+        : [],
+    };
+  },
+  updateCustomerVisibility: async (
+    customerId: string,
+    payload: { departmentIds: string[]; employees: Array<{ aiEmployeeId: string; canConsult: boolean; canAssign: boolean }> }
+  ): Promise<OrgHumanCenterOverview> => {
+    const data = await request<Record<string, unknown>>(`/api/admin/org-human-center/customers/${customerId}/visibility`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    return {
+      departments: Array.isArray(data.departments) ? data.departments.map((item) => normalizeDepartment(item as Record<string, unknown>)) : [],
+      positions: Array.isArray(data.positions) ? data.positions.map((item) => normalizeRecord(item as Record<string, unknown>)) : [],
+      roles: Array.isArray(data.roles) ? data.roles.map((item) => normalizeHrRole(item as Record<string, unknown>)) : [],
+      modelProfiles: Array.isArray(data.modelProfiles) ? data.modelProfiles.map((item) => normalizeModelProfile(item as Record<string, unknown>)) : [],
+      employees: Array.isArray(data.employees) ? data.employees.map((item) => normalizeAiEmployee(item as Record<string, unknown>)) : [],
+      customers: Array.isArray(data.customers) ? data.customers.map((item) => normalizeCustomerMember(item as Record<string, unknown>)) : [],
+      customerRoles: Array.isArray(data.customerRoles) ? data.customerRoles.map((item) => normalizeHrRole(item as Record<string, unknown>)) : [],
+      customerDepartmentVisibility: Array.isArray(data.customerDepartmentVisibility)
+        ? data.customerDepartmentVisibility.map((item) => normalizeCustomerVisibility(item as Record<string, unknown>))
+        : [],
+      customerEmployeeVisibility: Array.isArray(data.customerEmployeeVisibility)
+        ? data.customerEmployeeVisibility.map((item) => normalizeCustomerVisibility(item as Record<string, unknown>))
+        : [],
+    };
   },
   getAiEmployee: async (id: string) => {
     const data = await request<Record<string, unknown>>(`/api/admin/ai-employees/${id}`);
