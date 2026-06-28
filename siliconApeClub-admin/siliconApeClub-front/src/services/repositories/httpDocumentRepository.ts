@@ -21,6 +21,7 @@ import {
   CreateFolderInput,
   DocumentSourceAsset,
   DocumentRepository,
+  GenerateWikiInput,
   SaveCorrectionInput,
   SearchInput,
   StartParseInput,
@@ -486,6 +487,16 @@ export const httpDocumentRepository: DocumentRepository = {
     return normalizeDocument(data);
   },
 
+  async generateWiki(id: string, input: GenerateWikiInput) {
+    const data = await request<ApiDocument>(`/api/documents/${toNumericId(id)}/to-wiki`, {
+      method: 'POST',
+      body: JSON.stringify({
+        publish: input.publish ?? true,
+      }),
+    });
+    return normalizeDocument(data);
+  },
+
   async requestAudit(id: string, _input: AuditInput) {
     const data = await request<ApiDocument>(`/api/documents/${toNumericId(id)}/request-audit`, {
       method: 'POST',
@@ -573,6 +584,7 @@ export const httpDocumentRepository: DocumentRepository = {
       method: 'POST',
       body: JSON.stringify({
         name: input.name,
+        departmentId: toNumericId(input.departmentId),
         parentId: toNumericId(input.parentId),
       }),
     });

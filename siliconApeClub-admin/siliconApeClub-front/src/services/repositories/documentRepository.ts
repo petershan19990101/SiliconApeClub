@@ -44,12 +44,18 @@ export interface StartRagSyncInput {
   operator: User;
 }
 
+export interface GenerateWikiInput {
+  operator: User;
+  publish?: boolean;
+}
+
 export interface AuditInput {
   operator: User;
 }
 
 export interface CreateFolderInput {
   name: string;
+  departmentId?: string;
   parentId?: string;
   creator: User;
 }
@@ -73,6 +79,7 @@ export interface DocumentRepository {
   saveCorrection(id: string, input: SaveCorrectionInput): Promise<Document>;
   startParse(id: string, input: StartParseInput): Promise<Document>;
   startRagSync(id: string, input: StartRagSyncInput): Promise<Document>;
+  generateWiki(id: string, input: GenerateWikiInput): Promise<Document>;
   requestAudit(id: string, input: AuditInput): Promise<Document>;
   rejectAudit(id: string, reason: string, input: AuditInput): Promise<Document>;
   publish(id: string, input: AuditInput): Promise<Document>;

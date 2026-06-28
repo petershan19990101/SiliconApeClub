@@ -3,6 +3,30 @@ import { DocumentViewerKind } from '../components/document-viewer/types';
 export const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg']);
 export const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'ogg', 'mov']);
 export const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown']);
+export const TEXT_EXTENSIONS = new Set([
+  'txt',
+  'text',
+  'sql',
+  'log',
+  'json',
+  'yaml',
+  'yml',
+  'xml',
+  'properties',
+  'ini',
+  'conf',
+  'env',
+  'java',
+  'js',
+  'jsx',
+  'ts',
+  'tsx',
+  'py',
+  'go',
+  'sh',
+  'css',
+]);
+export const HTML_EXTENSIONS = new Set(['html', 'htm']);
 export const PDF_EXTENSIONS = new Set(['pdf']);
 export const DOCX_EXTENSIONS = new Set(['docx']);
 export const PPTX_EXTENSIONS = new Set(['pptx']);
@@ -12,6 +36,8 @@ export const SUPPORTED_UPLOAD_EXTENSIONS = new Set([
   ...IMAGE_EXTENSIONS,
   ...VIDEO_EXTENSIONS,
   ...MARKDOWN_EXTENSIONS,
+  ...TEXT_EXTENSIONS,
+  ...HTML_EXTENSIONS,
   ...PDF_EXTENSIONS,
   ...DOCX_EXTENSIONS,
   ...PPTX_EXTENSIONS,
@@ -27,6 +53,29 @@ export const UPLOAD_ACCEPT = [
   '.csv',
   '.md',
   '.markdown',
+  '.txt',
+  '.text',
+  '.sql',
+  '.log',
+  '.json',
+  '.yaml',
+  '.yml',
+  '.xml',
+  '.properties',
+  '.ini',
+  '.conf',
+  '.env',
+  '.java',
+  '.js',
+  '.jsx',
+  '.ts',
+  '.tsx',
+  '.py',
+  '.go',
+  '.sh',
+  '.css',
+  '.html',
+  '.htm',
   '.png',
   '.jpg',
   '.jpeg',
@@ -56,6 +105,9 @@ export function resolveViewerKindByExtension(extension: string): DocumentViewerK
     return 'pdf';
   }
   if (MARKDOWN_EXTENSIONS.has(extension)) {
+    return 'markdown';
+  }
+  if (TEXT_EXTENSIONS.has(extension) || HTML_EXTENSIONS.has(extension)) {
     return 'markdown';
   }
   if (DOCX_EXTENSIONS.has(extension)) {

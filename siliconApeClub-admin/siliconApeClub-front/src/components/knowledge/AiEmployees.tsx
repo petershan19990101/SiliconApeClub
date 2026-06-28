@@ -1,8 +1,9 @@
 import React from 'react';
-import { Briefcase, Building2, Contact, Plus, RefreshCw, Save, ShieldCheck, Users } from 'lucide-react';
+import { Briefcase, Building2, Contact, EyeOff, Plus, RefreshCw, Save, ShieldCheck, Trash2, Users } from 'lucide-react';
 import { knowledgeApi } from '../../services/knowledge';
-import { AdminDepartment, AiEmployee, CustomerVisibility, OrgHumanCenterOverview, PositionPackage } from '../../types';
+import { AdminDepartment, AiEmployee, CustomerVisibility, EmployeeAssessmentRule, OrgHumanCenterOverview, PositionPackage } from '../../types';
 import { useToast } from '../../contexts/ToastContext';
+import { useUser } from '../../contexts/UserContext';
 import { cx } from '../../lib/format';
 
 type CenterSection = 'employees' | 'customers';
@@ -29,6 +30,8 @@ type AiEmployeeForm = {
   performanceStatus: string;
   enabled: boolean;
   packageIds: string[];
+  skillIds: string[];
+  assessmentRules: EmployeeAssessmentRule[];
 };
 
 const EMPTY_FORM: AiEmployeeForm = {
@@ -50,6 +53,8 @@ const EMPTY_FORM: AiEmployeeForm = {
   performanceStatus: 'trial',
   enabled: true,
   packageIds: [],
+  skillIds: [],
+  assessmentRules: [],
 };
 
 const EMPTY_OVERVIEW: OrgHumanCenterOverview = {
@@ -58,6 +63,7 @@ const EMPTY_OVERVIEW: OrgHumanCenterOverview = {
   roles: [],
   modelProfiles: [],
   employees: [],
+  skills: [],
   customers: [],
   customerRoles: [],
   customerDepartmentVisibility: [],
@@ -66,17 +72,43 @@ const EMPTY_OVERVIEW: OrgHumanCenterOverview = {
 
 export function AiEmployees({ defaultSection = 'employees' }: { defaultSection?: CenterSection }) {
   const toast = useToast();
+  const { currentUser } = useUser();
   const [section, setSection] = React.useState<CenterSection>(defaultSection);
   const [overview, setOverview] = React.useState<OrgHumanCenterOverview>(EMPTY_OVERVIEW);
   const [packages, setPackages] = React.useState<PositionPackage[]>([]);
   const [form, setForm] = React.useState<AiEmployeeForm>(EMPTY_FORM);
   const [selectedEmployee, setSelectedEmployee] = React.useState<AiEmployee | null>(null);
+  const [selectedDepartmentId, setSelectedDepartmentId] = React.useState('');
+  const [showOffline, setShowOffline] = React.useState(false);
   const [isLoading, setIsLoading] = React.useState(false);
   const [isSaving, setIsSaving] = React.useState(false);
 
   const departmentTree = React.useMemo(() => buildDepartmentTree(overview.departments), [overview.departments]);
+  const activeEmployees = React.useMemo(
+    () => overview.employees.filter((employee) => showOffline || isActiveEmployee(employee)),
+    [overview.employees, showOffline]
+  );
+  const activeEmployeeCount = React.useMemo(
+    () => overview.employees.filter(isActiveEmployee).length,
+    [overview.employees]
+  );
+  const selectedDepartment = overview.departments.find((department) => department.id === selectedDepartmentId);
+  const visibleDepartmentIds = React.useMemo(
+    () => selectedDepartmentId ? collectDepartmentIds(overview.departments, selectedDepartmentId) : [],
+    [overview.departments, selectedDepartmentId]
+  );
+  const filteredEmployees = React.useMemo(
+    () => visibleDepartmentIds.length
+      ? activeEmployees.filter((employee) => employee.departmentId && visibleDepartmentIds.includes(employee.departmentId))
+      : activeEmployees,
+    [activeEmployees, visibleDepartmentIds]
+  );
+  const approvedSkills = React.useMemo(
+    () => overview.skills.filter((skill) => skill.reviewStatus === 'approved' && skill.enabled && (isTopManager(currentUser) || skill.skillLevel !== 'advanced')),
+    [overview.skills, currentUser]
+  );
   const employeeCost = React.useMemo(
-    () => overview.employees.reduce((sum, employee) => sum + Number(employee.costRate ?? 0), 0),
+    () => overview.employees.filter(isActiveEmployee).reduce((sum, employee) => sum + Number(employee.costRate ?? 0), 0),
     [overview.employees]
   );
 
@@ -93,6 +125,7 @@ export function AiEmployees({ defaultSection = 'employees' }: { defaultSection?:
         ...current,
         departmentId: current.departmentId || nextOverview.departments[0]?.id || '',
       }));
+      setSelectedDepartmentId((current) => current || nextOverview.departments[0]?.id || '');
     } catch (error) {
       toast.pushToast({ title: '组织与人力中心加载失败', description: error instanceof Error ? error.message : undefined, tone: 'error' });
     } finally {
@@ -110,7 +143,7 @@ export function AiEmployees({ defaultSection = 'employees' }: { defaultSection?:
 
   const startCreate = () => {
     setSelectedEmployee(null);
-    setForm({ ...EMPTY_FORM, departmentId: overview.departments[0]?.id ?? '' });
+    setForm({ ...EMPTY_FORM, departmentId: selectedDepartmentId || overview.departments[0]?.id || '' });
   };
 
   const startEdit = async (item: AiEmployee) => {
@@ -138,6 +171,8 @@ export function AiEmployees({ defaultSection = 'employees' }: { defaultSection?:
         performanceStatus: detail.performanceStatus ?? 'trial',
         enabled: detail.enabled,
         packageIds: (detail.packages ?? []).map((pkg) => pkg.id),
+        skillIds: (detail.skills ?? []).map((skill) => skill.skillId),
+        assessmentRules: detail.assessmentRules?.length ? detail.assessmentRules : defaultAssessmentRules(detail),
       });
     } catch (error) {
       toast.pushToast({ title: '读取员工配置失败', description: error instanceof Error ? error.message : undefined, tone: 'error' });
@@ -150,6 +185,39 @@ export function AiEmployees({ defaultSection = 'employees' }: { defaultSection?:
       packageIds: current.packageIds.includes(packageId)
         ? current.packageIds.filter((item) => item !== packageId)
         : [...current.packageIds, packageId],
+    }));
+  };
+
+  const toggleSkill = (skillId: string) => {
+    setForm((current) => ({
+      ...current,
+      skillIds: current.skillIds.includes(skillId)
+        ? current.skillIds.filter((item) => item !== skillId)
+        : [...current.skillIds, skillId],
+    }));
+  };
+
+  const updateAssessmentRule = (index: number, patch: Partial<EmployeeAssessmentRule>) => {
+    setForm((current) => ({
+      ...current,
+      assessmentRules: current.assessmentRules.map((rule, ruleIndex) => ruleIndex === index ? { ...rule, ...patch } : rule),
+    }));
+  };
+
+  const addAssessmentRule = () => {
+    setForm((current) => ({
+      ...current,
+      assessmentRules: [
+        ...current.assessmentRules,
+        { metricKey: '', metricLabel: '', metricType: 'count', targetValue: 0, weight: 1, unit: 'count', enabled: true },
+      ],
+    }));
+  };
+
+  const removeAssessmentRule = (index: number) => {
+    setForm((current) => ({
+      ...current,
+      assessmentRules: current.assessmentRules.filter((_, ruleIndex) => ruleIndex !== index),
     }));
   };
 
@@ -187,6 +255,8 @@ export function AiEmployees({ defaultSection = 'employees' }: { defaultSection?:
         ? await knowledgeApi.updateAiEmployee(form.id, payload)
         : await knowledgeApi.createAiEmployee(payload);
       await knowledgeApi.updateAiEmployeePackages(saved.id, form.packageIds);
+      await knowledgeApi.updateAiEmployeeSkills(saved.id, form.skillIds);
+      await knowledgeApi.updateAiEmployeeAssessmentRules(saved.id, form.assessmentRules);
       toast.pushToast({ title: form.id ? '员工配置已更新' : '员工已创建', tone: 'success' });
       setSelectedEmployee(null);
       setForm({ ...EMPTY_FORM, departmentId: form.departmentId });
@@ -195,6 +265,22 @@ export function AiEmployees({ defaultSection = 'employees' }: { defaultSection?:
       toast.pushToast({ title: '保存失败', description: error instanceof Error ? error.message : undefined, tone: 'error' });
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const offlineEmployee = async (item: AiEmployee) => {
+    if (!window.confirm(`确认将 ${item.name} 标记为离职/下线？个人记忆会被清理，知识资产作者归属不变。`)) {
+      return;
+    }
+    try {
+      await knowledgeApi.offlineAiEmployee(item.id, '管理端离职/下线');
+      toast.pushToast({ title: '员工已下线，个人记忆已清理', tone: 'success' });
+      if (form.id === item.id) {
+        startCreate();
+      }
+      await load();
+    } catch (error) {
+      toast.pushToast({ title: '员工下线失败', description: error instanceof Error ? error.message : undefined, tone: 'error' });
     }
   };
 
@@ -223,7 +309,7 @@ export function AiEmployees({ defaultSection = 'employees' }: { defaultSection?:
 
       <section className="grid gap-3 md:grid-cols-4">
         <Metric icon={Building2} label="组织单元" value={overview.departments.length} />
-        <Metric icon={Users} label="AI 员工" value={overview.employees.length} />
+        <Metric icon={Users} label="在岗 AI 员工" value={activeEmployeeCount} />
         <Metric icon={Contact} label="客户会员" value={overview.customers.length} />
         <Metric icon={Briefcase} label="小时成本基线" value={employeeCost.toFixed(0)} />
       </section>
@@ -239,12 +325,66 @@ export function AiEmployees({ defaultSection = 'employees' }: { defaultSection?:
             {!isLoading && departmentTree.length === 0 ? <p className="py-6 text-center text-sm text-slate-500">暂无组织单元</p> : null}
             <div className="space-y-2">
               {departmentTree.map((department) => (
-                <DepartmentNode key={department.id} department={department} employees={overview.employees} level={0} />
+                <DepartmentNode
+                  key={department.id}
+                  department={department}
+                  employees={activeEmployees}
+                  selectedDepartmentId={selectedDepartmentId}
+                  onSelect={setSelectedDepartmentId}
+                  level={0}
+                />
               ))}
             </div>
           </section>
 
           <div className="space-y-6">
+            <section className="rounded-lg border border-slate-200 bg-white">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 p-5">
+                <div>
+                  <h2 className="text-base font-bold text-slate-900">{selectedDepartment?.name || '全部组织'} · 员工列表</h2>
+                  <p className="mt-1 text-xs text-slate-500">{filteredEmployees.length} 名员工 · 默认隐藏离职/下线员工</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600">
+                    <input type="checkbox" checked={showOffline} onChange={(event) => setShowOffline(event.target.checked)} />
+                    显示离职/下线
+                  </label>
+                  <button onClick={startCreate} className="inline-flex items-center gap-2 rounded-lg bg-blue-700 px-3 py-2 text-sm font-bold text-white">
+                    <Plus size={15} />
+                    新建员工
+                  </button>
+                </div>
+              </div>
+              {isLoading ? <div className="p-8 text-center text-sm text-slate-500">加载中...</div> : null}
+              {!isLoading && filteredEmployees.length === 0 ? <div className="p-8 text-center text-sm text-slate-500">暂无员工</div> : null}
+              <div className="divide-y divide-slate-100">
+                {filteredEmployees.map((item) => (
+                  <div key={item.id} className="grid gap-4 p-4 xl:grid-cols-[1fr_auto]">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Users size={16} className="text-blue-600" />
+                        <p className="truncate text-sm font-bold text-slate-900">{item.name}</p>
+                        <StatusPill employee={item} />
+                        {item.skillCount ? <span className="rounded-lg bg-indigo-50 px-2 py-0.5 text-[11px] font-bold text-indigo-700">{item.skillCount} 技能</span> : null}
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {item.code} · {item.departmentName || '未配置部门'} · {item.roleTitle || item.positionCode || '未配置岗位'} · Token {item.totalTokens ?? 0} · 记忆 {item.memoryItems ?? 0}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => void startEdit(item)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-700">配置</button>
+                      {isActiveEmployee(item) ? (
+                        <button onClick={() => void offlineEmployee(item)} className="inline-flex items-center gap-1 rounded-lg border border-rose-200 px-3 py-1.5 text-sm font-bold text-rose-700">
+                          <EyeOff size={14} />
+                          下线
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
             <section className="grid gap-4 rounded-lg border border-slate-200 bg-white p-5">
               <div className="flex items-center justify-between">
                 <h2 className="text-base font-bold text-slate-900">{form.id ? '编辑 AI 员工' : '创建 AI 员工'}</h2>
@@ -302,11 +442,56 @@ export function AiEmployees({ defaultSection = 'employees' }: { defaultSection?:
               <textarea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="一句话说明员工边界" className="min-h-20 rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none" />
               <textarea value={form.responsibilities} onChange={(event) => setForm({ ...form, responsibilities: event.target.value })} placeholder="职责说明" className="min-h-24 rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none" />
 
-              <div className="grid gap-3 lg:grid-cols-3">
-                <JsonBox label="技能 JSON" value={form.skillsJson} onChange={(value) => setForm({ ...form, skillsJson: value })} />
+              <div className="grid gap-3 lg:grid-cols-2">
                 <JsonBox label="记忆策略 JSON" value={form.memoryPolicyJson} onChange={(value) => setForm({ ...form, memoryPolicyJson: value })} />
                 <JsonBox label="模型配置 JSON" value={form.modelConfigJson} onChange={(value) => setForm({ ...form, modelConfigJson: value })} />
               </div>
+
+              <div className="rounded-lg border border-slate-200 p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <p className="text-sm font-bold text-slate-900">员工技能</p>
+                  <span className="text-xs font-medium text-slate-500">仅可绑定审核通过技能</span>
+                </div>
+                <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                  {approvedSkills.map((skill) => (
+                    <label key={skill.id} className="flex items-start gap-3 rounded-lg border border-slate-200 p-3 text-sm">
+                      <input type="checkbox" checked={form.skillIds.includes(skill.id)} onChange={() => toggleSkill(skill.id)} className="mt-1" />
+                      <span>
+                        <span className="block font-bold text-slate-900">{skill.name}</span>
+                        <span className="block text-xs text-slate-500">{skill.skillType} · {skill.skillLevel} · {skill.departmentName || '未绑定部门'}</span>
+                      </span>
+                    </label>
+                  ))}
+                  {approvedSkills.length === 0 ? <p className="text-sm text-slate-500">暂无审核通过技能。</p> : null}
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <p className="text-sm font-bold text-slate-900">考核规则</p>
+                  <button onClick={addAssessmentRule} className="inline-flex items-center gap-1 rounded-lg border border-blue-200 px-2.5 py-1.5 text-xs font-bold text-blue-700">
+                    <Plus size={14} />
+                    增加规则
+                  </button>
+                </div>
+                <div className="grid gap-2">
+                  {form.assessmentRules.map((rule, index) => (
+                    <div key={`${rule.metricKey}-${index}`} className="grid gap-2 rounded-lg border border-slate-100 bg-slate-50 p-3 lg:grid-cols-[1fr_1fr_110px_110px_90px_auto]">
+                      <input value={rule.metricKey} onChange={(event) => updateAssessmentRule(index, { metricKey: event.target.value })} placeholder="指标编码" className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none" />
+                      <input value={rule.metricLabel} onChange={(event) => updateAssessmentRule(index, { metricLabel: event.target.value })} placeholder="指标名称" className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none" />
+                      <input type="number" value={rule.targetValue} onChange={(event) => updateAssessmentRule(index, { targetValue: Number(event.target.value || 0) })} placeholder="目标值" className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none" />
+                      <input type="number" step="0.1" value={rule.weight} onChange={(event) => updateAssessmentRule(index, { weight: Number(event.target.value || 0) })} placeholder="权重" className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none" />
+                      <input value={rule.unit} onChange={(event) => updateAssessmentRule(index, { unit: event.target.value })} placeholder="单位" className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none" />
+                      <button onClick={() => removeAssessmentRule(index)} className="inline-flex items-center justify-center rounded-lg border border-rose-200 px-2.5 py-2 text-rose-700">
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  ))}
+                  {form.assessmentRules.length === 0 ? <p className="text-sm text-slate-500">暂无考核规则。</p> : null}
+                </div>
+              </div>
+
+              {selectedEmployee?.performance ? <PerformancePanel performance={selectedEmployee.performance} /> : null}
 
               <div className="flex flex-wrap items-center gap-3">
                 <button onClick={() => void save()} disabled={isSaving} className="inline-flex items-center gap-2 rounded-lg bg-blue-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
@@ -343,25 +528,6 @@ export function AiEmployees({ defaultSection = 'employees' }: { defaultSection?:
               ) : null}
             </section>
 
-            <section className="divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white">
-              {isLoading ? <div className="p-8 text-center text-sm text-slate-500">加载中...</div> : null}
-              {!isLoading && overview.employees.length === 0 ? <div className="p-8 text-center text-sm text-slate-500">暂无 AI 员工</div> : null}
-              {overview.employees.map((item) => (
-                <div key={item.id} className="flex flex-wrap items-center justify-between gap-4 p-4">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <Users size={16} className="text-blue-600" />
-                      <p className="truncate text-sm font-bold text-slate-900">{item.name}</p>
-                      <span className="rounded-lg bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-600">{item.performanceStatus || item.status}</span>
-                    </div>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {item.code} · {item.departmentName || '未配置部门'} · {item.roleTitle || item.positionCode || '未配置岗位'} · 成本 {item.costRate ?? 0}
-                    </p>
-                  </div>
-                  <button onClick={() => void startEdit(item)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-700">配置</button>
-                </div>
-              ))}
-            </section>
           </div>
         </div>
       ) : (
@@ -383,20 +549,92 @@ function Metric({ icon: Icon, label, value }: { icon: React.ComponentType<{ size
   );
 }
 
-function DepartmentNode({ department, employees, level }: { department: AdminDepartment; employees: AiEmployee[]; level: number }) {
+function DepartmentNode({
+  department,
+  employees,
+  selectedDepartmentId,
+  onSelect,
+  level,
+}: {
+  department: AdminDepartment;
+  employees: AiEmployee[];
+  selectedDepartmentId: string;
+  onSelect: (departmentId: string) => void;
+  level: number;
+}) {
   const directEmployees = employees.filter((employee) => employee.departmentId === department.id);
+  const active = selectedDepartmentId === department.id;
   return (
     <div>
-      <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2" style={{ marginLeft: level * 14 }}>
+      <button
+        onClick={() => onSelect(department.id)}
+        className={cx(
+          'w-full rounded-lg border px-3 py-2 text-left transition',
+          active ? 'border-blue-200 bg-blue-50' : 'border-slate-100 bg-slate-50 hover:border-slate-200'
+        )}
+        style={{ marginLeft: level * 14 }}
+      >
         <div className="flex items-center justify-between gap-2">
           <p className="truncate text-sm font-bold text-slate-800">{department.name}</p>
           <span className="shrink-0 text-[11px] font-bold uppercase text-slate-400">{department.unitType || 'department'}</span>
         </div>
         <p className="mt-1 text-xs text-slate-500">{directEmployees.length} 名员工 · {department.code}</p>
-      </div>
+      </button>
       {department.children.map((child) => (
-        <DepartmentNode key={child.id} department={child} employees={employees} level={level + 1} />
+        <DepartmentNode
+          key={child.id}
+          department={child}
+          employees={employees}
+          selectedDepartmentId={selectedDepartmentId}
+          onSelect={onSelect}
+          level={level + 1}
+        />
       ))}
+    </div>
+  );
+}
+
+function StatusPill({ employee }: { employee: AiEmployee }) {
+  const active = isActiveEmployee(employee);
+  return (
+    <span className={cx(
+      'rounded-lg px-2 py-0.5 text-[11px] font-bold',
+      active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
+    )}>
+      {active ? (employee.performanceStatus || 'active') : 'offline'}
+    </span>
+  );
+}
+
+function PerformancePanel({ performance }: { performance: NonNullable<AiEmployee['performance']> }) {
+  return (
+    <div className="rounded-lg border border-slate-200 p-4">
+      <p className="mb-3 text-sm font-bold text-slate-900">绩效与成本</p>
+      <div className="grid gap-3 md:grid-cols-4">
+        <MiniMetric label="Token 消耗" value={performance.usage.totalTokens} />
+        <MiniMetric label="记忆容量" value={`${performance.usage.memoryItems} 项`} />
+        <MiniMetric label="任务数" value={performance.workerTaskCount} />
+        <MiniMetric label="沉淀候选" value={performance.wikiProposalCount} />
+      </div>
+      <div className="mt-4 grid gap-2">
+        {performance.rules.map((rule) => (
+          <div key={rule.metricKey} className="grid gap-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600 md:grid-cols-[1fr_auto_auto]">
+            <span className="font-bold text-slate-800">{rule.metricLabel}</span>
+            <span>目标 {rule.targetValue} {rule.unit}</span>
+            <span>当前 {rule.actualValue ?? 0} {rule.unit}</span>
+          </div>
+        ))}
+        {performance.rules.length === 0 ? <p className="text-sm text-slate-500">暂无可用绩效指标。</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function MiniMetric({ label, value }: { label: string; value: number | string }) {
+  return (
+    <div className="rounded-lg bg-slate-50 p-3">
+      <p className="text-xs font-medium text-slate-500">{label}</p>
+      <p className="mt-1 text-lg font-black text-slate-900">{value}</p>
     </div>
   );
 }
@@ -644,6 +882,64 @@ function buildDepartmentTree(items: AdminDepartment[]) {
     }
   });
   return roots;
+}
+
+function collectDepartmentIds(items: AdminDepartment[], rootId: string) {
+  const tree = buildDepartmentTree(items);
+  const result: string[] = [];
+  const walk = (department: AdminDepartment) => {
+    result.push(department.id);
+    department.children.forEach(walk);
+  };
+  const find = (nodes: AdminDepartment[]): AdminDepartment | undefined => {
+    for (const node of nodes) {
+      if (node.id === rootId) {
+        return node;
+      }
+      const match = find(node.children);
+      if (match) {
+        return match;
+      }
+    }
+    return undefined;
+  };
+  const root = find(tree);
+  if (root) {
+    walk(root);
+  }
+  return result;
+}
+
+function isActiveEmployee(employee: AiEmployee) {
+  return employee.enabled && String(employee.status || '').toUpperCase() !== 'OFFLINE' && employee.performanceStatus !== 'offline';
+}
+
+function isTopManager(user: ReturnType<typeof useUser>['currentUser']) {
+  return user?.role === 'admin' || Boolean(user?.roles?.some((role) => role.adminRole));
+}
+
+function defaultAssessmentRules(employee: AiEmployee): EmployeeAssessmentRule[] {
+  if (employee.roleTitle?.includes('测试') || employee.positionCode?.includes('test')) {
+    return [
+      { metricKey: 'requirement_count', metricLabel: '需求数量', metricType: 'count', targetValue: 10, weight: 0.3, unit: 'item', enabled: true },
+      { metricKey: 'bug_report_count', metricLabel: '提出 Bug 数', metricType: 'count', targetValue: 8, weight: 0.25, unit: 'item', enabled: true },
+      { metricKey: 'test_case_count', metricLabel: '用例数量', metricType: 'count', targetValue: 20, weight: 0.25, unit: 'item', enabled: true },
+      { metricKey: 'test_report_count', metricLabel: '测试报告数量', metricType: 'count', targetValue: 4, weight: 0.2, unit: 'item', enabled: true },
+    ];
+  }
+  if (employee.positionCode?.includes('developer') || employee.roleTitle?.includes('研发')) {
+    return [
+      { metricKey: 'code_lines', metricLabel: '代码量', metricType: 'count', targetValue: 1000, weight: 0.2, unit: 'line', enabled: true },
+      { metricKey: 'bug_fix_count', metricLabel: '修复 Bug 数', metricType: 'count', targetValue: 8, weight: 0.25, unit: 'item', enabled: true },
+      { metricKey: 'document_count', metricLabel: '文档数量', metricType: 'count', targetValue: 4, weight: 0.2, unit: 'item', enabled: true },
+      { metricKey: 'delivered_requirement_count', metricLabel: '实现需求数量', metricType: 'count', targetValue: 6, weight: 0.35, unit: 'item', enabled: true },
+    ];
+  }
+  return [
+    { metricKey: 'requirement_intake_count', metricLabel: '需求接待数量', metricType: 'count', targetValue: 20, weight: 0.35, unit: 'item', enabled: true },
+    { metricKey: 'route_accuracy_count', metricLabel: '路由准确数量', metricType: 'count', targetValue: 16, weight: 0.35, unit: 'item', enabled: true },
+    { metricKey: 'customer_followup_count', metricLabel: '客户跟进数量', metricType: 'count', targetValue: 20, weight: 0.3, unit: 'item', enabled: true },
+  ];
 }
 
 function prettyJson(value: string | undefined, fallback: string) {

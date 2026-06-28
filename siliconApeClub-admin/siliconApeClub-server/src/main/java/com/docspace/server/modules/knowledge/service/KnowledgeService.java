@@ -81,8 +81,10 @@ public class KnowledgeService {
     @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> syncWikiPage(Long pageId, SecurityUser currentUser) {
         Map<String, Object> page = jdbcTemplate.queryForObject(
-                "SELECT id, title, content, current_version, metadata_json, tags_json, department_id, acl_policy_id " +
-                        "FROM ks_wiki_page WHERE id = ? AND deleted = 0",
+                "SELECT p.id, p.title, p.content, p.current_version, p.metadata_json, p.tags_json, p.department_id, " +
+                        "p.acl_policy_id, a.acl_version, a.security_level " +
+                        "FROM ks_wiki_page p LEFT JOIN ks_acl_policy a ON a.id = p.acl_policy_id " +
+                        "WHERE p.id = ? AND p.deleted = 0",
                 rowMapper(), pageId);
         if (page == null) {
             throw new BusinessException("Wiki 页面不存在");
@@ -118,7 +120,7 @@ public class KnowledgeService {
                         "INSERT INTO ks_chunk(source_type, source_id, source_version, wiki_page_id, wiki_page_version, " +
                                 "content_hash, chunk_text, chunk_summary, metadata_json, acl_policy_id, acl_version, security_level, " +
                                 "department_tags, knowledge_status, embedding_model, embedding_version, embedding, index_version) " +
-                                "VALUES ('wiki_page', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'internal', ?, 'active', 'text-embedding-v4', 'mvp-local-hash', CAST(? AS vector), ?)",
+                                "VALUES ('wiki_page', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'text-embedding-v4', 'mvp-local-hash', CAST(? AS vector), ?)",
                         pageId,
                         version,
                         pageId,
@@ -128,6 +130,8 @@ public class KnowledgeService {
                         summarize(chunk),
                         metadata,
                         page.get("aclPolicyId") == null ? 1L : asLong(page.get("aclPolicyId")),
+                        page.get("aclVersion") == null ? 1 : asInteger(page.get("aclVersion")),
+                        page.get("securityLevel") == null ? "internal" : asString(page.get("securityLevel")),
                         page.get("departmentId") == null ? "" : String.valueOf(page.get("departmentId")),
                         deterministicEmbedding(chunk),
                         indexVersion);

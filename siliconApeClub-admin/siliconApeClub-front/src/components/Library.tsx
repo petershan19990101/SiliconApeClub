@@ -39,7 +39,7 @@ export function Library() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [activeDocument, setActiveDocument] = useState<Document | null>(null);
   const [previewDocument, setPreviewDocument] = useState<Document | null>(null);
-  const [activeRagDocument, setActiveRagDocument] = useState<Document | null>(null);
+  const [activeKnowledgeDocument, setActiveKnowledgeDocument] = useState<Document | null>(null);
   const [permissionModalItem, setPermissionModalItem] = useState<PermissionModalItem | null>(null);
   const [rejectDocument, setRejectDocument] = useState<Document | null>(null);
   const [rejectReason, setRejectReason] = useState('');
@@ -75,7 +75,7 @@ export function Library() {
       setFolders(folderResponse.folders);
       setSelectedIds((current) => current.filter((id) => filteredDocuments.some((document) => document.id === id)));
     } catch (caughtError) {
-      setError(getErrorMessage(caughtError, '知识资产加载失败'));
+      setError(getErrorMessage(caughtError, '文档管理加载失败'));
     } finally {
       setLoading(false);
     }
@@ -117,8 +117,8 @@ export function Library() {
     if (previewDocument?.id === documentId) {
       setPreviewDocument(null);
     }
-    if (activeRagDocument?.id === documentId) {
-      setActiveRagDocument(null);
+    if (activeKnowledgeDocument?.id === documentId) {
+      setActiveKnowledgeDocument(null);
     }
     if (permissionModalItem?.type === 'document' && permissionModalItem.item.id === documentId) {
       setPermissionModalItem(null);
@@ -148,8 +148,8 @@ export function Library() {
     if (activeDocument?.id === updatedDocument.id) {
       setActiveDocument(updatedDocument);
     }
-    if (activeRagDocument?.id === updatedDocument.id) {
-      setActiveRagDocument(updatedDocument);
+    if (activeKnowledgeDocument?.id === updatedDocument.id) {
+      setActiveKnowledgeDocument(updatedDocument);
     }
   };
 
@@ -294,7 +294,10 @@ export function Library() {
       pushToast({
         tone: 'success',
         title: '文档已删除',
-        description: `“${deleteDocumentTarget.name}” 已从当前列表移除。`,
+        description:
+          deleteDocumentTarget.status === 'published' || deleteDocumentTarget.status === 'locked'
+            ? `“${deleteDocumentTarget.name}” 已删除，关联 LLM Wiki 与 RAG 内容已清理。`
+            : `“${deleteDocumentTarget.name}” 已从当前列表移除。`,
       });
       setDeleteDocumentTarget(null);
     } catch (caughtError) {
@@ -395,7 +398,7 @@ export function Library() {
           <div className="rounded-3xl border border-rose-100 bg-rose-50 p-8 text-rose-900">
             <div className="flex items-center gap-3">
               <AlertCircle size={20} />
-              <h2 className="text-lg font-bold">知识资产加载失败</h2>
+              <h2 className="text-lg font-bold">文档管理加载失败</h2>
             </div>
             <p className="mt-2 text-sm text-rose-700">{error}</p>
           </div>
@@ -424,7 +427,7 @@ export function Library() {
             onPreviewDocument={setPreviewDocument}
             onOpenPermissions={(document) => setPermissionModalItem({ type: 'document', item: document })}
             onOpenFolderPermissions={(folder) => setPermissionModalItem({ type: 'folder', item: folder })}
-            onPushRag={setActiveRagDocument}
+            onOpenKnowledgePipeline={setActiveKnowledgeDocument}
             onRequestAudit={(document) => void handleRequestAudit(document)}
             onPublish={(document) => void handlePublish(document)}
             onReject={(document) => {
@@ -450,7 +453,7 @@ export function Library() {
             onPreviewDocument={setPreviewDocument}
             onOpenPermissions={(document) => setPermissionModalItem({ type: 'document', item: document })}
             onOpenFolderPermissions={(folder) => setPermissionModalItem({ type: 'folder', item: folder })}
-            onPushRag={setActiveRagDocument}
+            onOpenKnowledgePipeline={setActiveKnowledgeDocument}
             onRequestAudit={(document) => void handleRequestAudit(document)}
             onPublish={(document) => void handlePublish(document)}
             onReject={(document) => {
@@ -479,8 +482,8 @@ export function Library() {
 
       {previewDocument ? <DocumentViewerModal document={previewDocument} onClose={() => setPreviewDocument(null)} /> : null}
 
-      {activeRagDocument ? (
-        <RagModal document={activeRagDocument} onClose={() => setActiveRagDocument(null)} onUpdate={updateDocument} />
+      {activeKnowledgeDocument ? (
+        <RagModal document={activeKnowledgeDocument} onClose={() => setActiveKnowledgeDocument(null)} onUpdate={updateDocument} />
       ) : null}
 
       {isUploadModalOpen ? (
@@ -563,7 +566,13 @@ export function Library() {
       <ConfirmDialog
         isOpen={Boolean(deleteDocumentTarget)}
         title="删除文档"
-        description={deleteDocumentTarget ? `将删除“${deleteDocumentTarget.name}”，此操作不可恢复。` : ''}
+        description={
+          deleteDocumentTarget
+            ? deleteDocumentTarget.status === 'published' || deleteDocumentTarget.status === 'locked'
+              ? `将删除已发布文档“${deleteDocumentTarget.name}”，并同步清空关联 LLM Wiki 与 RAG 索引内容。此操作不可恢复。`
+              : `将删除“${deleteDocumentTarget.name}”，此操作不可恢复。`
+            : ''
+        }
         confirmLabel="确认删除"
         tone="danger"
         busy={busyAction === (deleteDocumentTarget ? `delete:${deleteDocumentTarget.id}` : null)}

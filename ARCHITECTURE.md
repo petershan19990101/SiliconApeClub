@@ -80,7 +80,7 @@ Worker Platform 负责：
 
 - 登录鉴权、客户需求分组、历史聊天记录和产出物聚合。
 - 初始化业务前台角色，并按公司组织关系接待、澄清、拆解和派发任务。
-- 从管理台组织与人力中心投影公司组织、AI 员工、上下级关系、客户可见部门和客户可见员工权限。
+- 从管理台组织与人力中心投影公司组织、AI 员工、上下级关系、客户可见部门、客户可见员工权限、审核通过的 Skill 和员工技能绑定。
 - 加载 AI 员工身份、岗位知识包、Skill、权限边界、任务上下文和历史记忆。
 - 建立长任务账本、事件流、checkpoint、恢复、取消、转派和审核记录。
 - 通过内部服务调用受权限控制的 Wiki、RAG、citation log 和任务记忆能力。
@@ -145,14 +145,15 @@ AI 能力层
 
 | 逻辑服务 | 当前物理承载 | 当前职责 | 数据边界 |
 | --- | --- | --- | --- |
-| Admin Console Frontend | `siliconApeClub-front` | 硅基猿猴俱乐部管理台静态入口，承载知识资产、Wiki 中心、RAG 管理台、组织与人力中心、客户会员中心、岗位知识管理、权限与知识健康运营 | 无状态静态资源 |
+| Admin Console Frontend | `siliconApeClub-front` | 硅基猿猴俱乐部管理台静态入口，承载知识资产、Wiki 中心、RAG 管理台、组织与人力中心、技能仓库、客户会员中心、岗位知识管理、权限与知识健康运营 | 无状态静态资源 |
 | Worker Platform Frontend | `siliconApeClub-worker-front` | AI 员工平台客户端入口，承载需求工作台、聊天记录、多模态 block 渲染、组织员工视图和任务账本展示 | 无状态静态资源 |
 | Worker Platform API | `siliconApeClub-worker-platform` | AI 员工平台运行期 API，承载登录、客户需求分组、会话、消息、业务前台、员工直派、任务恢复 | `wp_*` 表 |
 | Worker Orchestrator | `siliconApeClub-worker-platform` | 组织关系路由、岗位知识包加载、Skill 加载、任务账本、部门协作、记忆维护、知识沉淀发起 | `wp_*` 表 + 内部知识服务 |
 | API Gateway | `siliconApeClub-server` | `/api/**` 统一入口、JWT 鉴权、CORS、管理台后端代理 | 共享主库 |
 | Auth & IAM Service | `siliconApeClub-server` | 用户、角色、部门、菜单、按钮权限、AI 员工身份、客户会员和权限边界 | 共享主库 |
-| Organization & Human Center Service | `siliconApeClub-server` | 公司组织、岗位、AI 员工属性、联系人关系、个人记忆策略、模型配置、客户可见性维护 | `ds_department`、`ds_ai_employee`、`hr_*`、`customer_*` |
-| Doc Service | `siliconApeClub-server` | 文档上传、目录、版本、解析产物、源文件管理、审核发布、推送 RAG | 共享主库 + MinIO |
+| Organization & Human Center Service | `siliconApeClub-server` | 公司组织、岗位、AI 员工属性、员工生命周期、联系人关系、个人记忆策略、模型配置、考核规则、员工计量和客户可见性维护 | `ds_department`、`ds_ai_employee`、`hr_employee_*`、`customer_*` |
+| Skill Repository Service | `siliconApeClub-server` | 人类维护或 AI 员工总结技能的草稿、提交审核、审核通过、驳回、归档和员工绑定源数据 | `hr_skill_repository`、`hr_skill_binding` |
+| Doc Service | `siliconApeClub-server` | 文档上传、目录、版本、解析产物、源文件管理、审核发布、文档到 LLM Wiki/RAG 生命周期入口 | 共享主库 + MinIO |
 | Wiki Center Service | `siliconApeClub-server` | Wiki 页面、版本、发布、归档、结构分组、权限展示、页面关系维护 | 共享主库 |
 | RAG Management Service | `siliconApeClub-server` + `retrieval-service` | RAG 调试回放、索引 chunk 可见性、ACL policy/binding 管控、chunk 治理 | 共享主库 + pgvector |
 | Knowledge Pipeline Worker | `knowledge-pipeline-worker` + `siliconApeClub-server` | 文档到 Wiki、Wiki 到 chunk、同步任务、通知与审计证据 | 共享主库 + RocketMQ |
@@ -257,6 +258,16 @@ admin-console
 - 人工校正
 - 文档审核发布
 
+当前解析器边界：
+
+- `apache_pdfbox_java_engine`：PDF 页级文本与图片提取。
+- `apache_poi_docx_java_engine`：DOCX 结构化提取并输出 Markdown。
+- `apache_poi_pptx_java_engine`：PPTX 幻灯片文本、表格、备注、图片提取并输出 Markdown。
+- `plain_text_java_engine`：Markdown、TXT、SQL、LOG、JSON、YAML、XML、配置文件和代码文件直读，生成文本与 Markdown 解析产物。
+- `html_to_markdown_java_engine`：HTML/HTM 通过 Java HTML Parser 转为 Markdown，保留标题、段落、列表、链接、引用和代码块。
+
+文件扩展名到解析器的默认映射由 `ds_parse_engine_binding` 管理，管理台解析配置页可查看和维护启停、默认解析器和排序。
+
 #### wiki-service
 
 职责：
@@ -304,22 +315,18 @@ DELETE /api/wiki/pages/{id}/relations/{relationId}
 
 职责：
 
-- 文档清洗
-- Markdown 标准化
-- 语义切片
-- 摘要
-- 标签
-- 实体抽取
-- 关系抽取
-- embedding 调用
-- 质量检查
-- 发布索引任务
+- 文档解析产物生成或更新 LLM Wiki。
+- 同一文档同一版本复用已有 Wiki 页面，避免重复知识污染。
+- 为文档版本生成或刷新 `ks_pipeline_job` 流水线台账。
+- 将文档权限投影到 `ks_acl_policy`、`ks_acl_binding`，再由 Wiki 与 chunk 引用。
+- 发布 Wiki 并触发 chunk、embedding、index record 写入。
+- 记录审计追踪、通知和失败原因，支持后续补偿和重试。
 
 当前承载：
 
-- `siliconApeClub-server` 负责管理台触发、审核和任务入口。
-- `knowledge-pipeline-worker` 负责独立文档到 Wiki 流水线。
-- `retrieval-service` 负责写入 chunk、embedding 和索引记录。
+- `siliconApeClub-server` 负责管理台触发、文档级 `/api/documents/{id}/to-wiki` 与后台 `/api/knowledge-pipeline/documents/{id}/to-wiki` 入口。
+- `knowledge-pipeline-worker` 负责独立文档到 Wiki 流水线补偿入口。
+- `retrieval-service` 保留独立索引写入能力；管理台内置链路当前由 `KnowledgeService.syncWikiPage` 写入 `ks_chunk`、`ks_index_record`。
 
 #### knowledge-index-service
 
@@ -454,15 +461,19 @@ doc-service 保存源文件与版本
   ↓
 parse worker 生成 Markdown 与解析产物
   ↓
-wiki-service 生成 Wiki 草稿
+knowledge-pipeline-service 生成或更新 LLM Wiki
   ↓
-知识负责人审核发布
+wiki-service 发布 Wiki
   ↓
-pipeline-service 生成 chunk
+knowledge-index-service 生成 chunk
   ↓
 embedding + index
   ↓
 index-service 更新同步账本
+  ↓
+doc-service 标记 RAG_READY
+  ↓
+提交审核与审核发布
   ↓
 retrieval-service 可检索
 ```
@@ -487,7 +498,7 @@ retrieval-service 可检索
 新 chunk active
 ```
 
-补充要求：管理台必须让入库状态可见。文档直推 RAG、文档生成 LLM Wiki 后入 RAG、Wiki 发布后入 RAG，三类路径最终都要落到 `ks_chunk`、`ks_index_record`、`ks_sync_job`，并能在 RAG 管理台的索引 chunk 列表中看到 active chunk。RAG 管理台不应只依赖用户猜测检索词，而应从索引账本反向展示最近可检索内容，同时提供 `ks_acl_policy`、`ks_acl_binding` 与 chunk 部门/岗位标签的查询和管控能力。
+补充要求：管理台必须让入库状态可见。默认路径是“文档生成 LLM Wiki 后入 RAG”，Wiki 发布后进入同一套 `ks_chunk`、`ks_index_record`、`ks_sync_job` 账本；文档直推 RAG 仅作为兼容/排障入口。RAG 管理台不应只依赖用户猜测检索词，而应从索引账本反向展示最近可检索内容，同时提供 `ks_acl_policy`、`ks_acl_binding` 与 chunk 部门/岗位标签的查询和管控能力。
 
 ### 5.3 AI 员工检索链路
 
@@ -690,7 +701,7 @@ POST /api/wiki/proposals
 | Embedding | 阿里云百炼 DashScope，缺省 hash fallback | chunk embedding、开发环境无 key 时可运行 |
 | Rerank | DashScope rerank 接口，可缺省跳过 | RAG 管理台调试和 AI 员工检索 |
 | LLM | 外部大模型 API 预留 | Wiki 生成、摘要、知识反馈扩展 |
-| 文档解析 | Apache PDFBox、Apache POI、LibreOffice 预览转换 | PDF、Word、PPT、Excel 等文档解析与预览 |
+| 文档解析 | Apache PDFBox、Apache POI、Java HTML Parser、通用文本直读解析器、LibreOffice 预览转换 | PDF、Word、PPT、Markdown、文本、SQL、LOG、HTML 等文档解析与预览 |
 | 向量库 | pgvector | RAG 向量召回 |
 | 检索服务 | FastAPI `retrieval-service` | 搜索、debug、sync job、权限校验 callback、citation callback |
 
@@ -1328,20 +1339,22 @@ Kubernetes
 
 ### 13.2 管理台能力
 
-- 知识资产：文档上传、目录、版本、解析产物、人工校正、审核发布、RAG 推送状态。
+- 知识资产：文档上传、目录、版本、解析产物、人工校正、生成 LLM Wiki 入 RAG、审核发布、生命周期状态。
 - 权限管理：菜单、角色、用户、部门、按钮权限、AI 员工可读边界。
 - Wiki 中心：结构分组、页面列表、详情、ACL 展示、关系图谱、关系新增与删除。
 - RAG 管理台：RAG 调试回放、active chunk 可见性、ACL policy/binding 管控、chunk 治理。
-- 组织与人力中心：公司组织、角色、岗位、AI 员工基础信息、职责、技能、联系人关系、个人记忆策略、模型配置、成本基线、岗位知识绑定。
+- 组织与人力中心：公司组织、角色、岗位、AI 员工基础信息、职责、生命周期、审核通过技能、联系人关系、个人记忆策略、模型配置、成本基线、考核规则、绩效计量、岗位知识绑定。
+- 技能仓库：维护 `hr_skill_repository`、`hr_skill_binding`，人类维护和 AI 员工总结的技能都必须审核通过后才能投影到 worker platform。
 - 客户会员中心：客户会员、客户角色、可见部门、可见员工、可咨询和可派活权限维护。
 - 岗位知识管理：基于 Wiki 页面集合的岗位知识 profile，支持增删改查、提交审核、审核通过、驳回、归档和删除。
 - 知识健康：健康问题、同步异常、权限异常、维护窗口和健康报告入口。
 
 ### 13.3 知识层闭环
 
-- 文档可生成 Wiki 草稿。
-- Wiki 发布后进入同步账本并写入 RAG 索引。
-- 文档直推 RAG、文档生成 Wiki 后入 RAG、Wiki 发布后入 RAG 都落入 `ks_sync_job`、`ks_chunk`、`ks_index_record`。
+- 文档解析成功后默认通过 `/api/documents/{id}/to-wiki` 生成或更新 LLM Wiki，并发布后写入 RAG 索引。
+- 文档到 Wiki 流水线落入 `ks_pipeline_job`，Wiki 发布后落入 `ks_sync_job`、`ks_chunk`、`ks_index_record`。
+- 文档权限会投影为 `ks_acl_policy`、`ks_acl_binding`，Wiki 与 chunk 引用 ACL 策略和版本；文档直推 RAG 仅作为兼容/排障入口。
+- 文档删除会走文档服务内的知识清理流程：`ds_document.deleted=1` 前清理关联 Wiki、Wiki 版本、关系、岗位知识引用、RAG chunk、index record 和文档级 ACL，并记录 `document_knowledge_delete` 流水线账本。
 - RAG 检索结果携带来源、版本、分数和权限校验信息。
 - citation log、task memory 和 Wiki proposal 为 AI 员工反向沉淀知识提供证据链。
 
@@ -1351,6 +1364,7 @@ Kubernetes
 - 需求工作台：按客户需求组管理历史需求、会话、任务和产出物。
 - 业务前台：外部客户默认由 `业务前台 Ada` 接待，负责需求澄清和组织派发。
 - 组织关系：worker platform 启动时从管理台组织与人力中心投影公司、部门、中心、战队、岗位、AI 员工和上下级/协作关系。
+- Skill 加载：worker platform 启动时从管理台技能仓库投影审核通过的技能和员工技能绑定到 `wp_worker_skill`、`wp_skill_binding`；高级技能由管理台技能等级和员工权限共同约束。
 - 员工权限：内部人员按 `consult_employee`、`assign_employee` 权限咨询或直派员工；外部客户按客户会员中心授权查看部分部门和员工，并只能咨询或派活授权员工。
 - 多模态输出：支持 markdown、受控 html、动态 form、artifact、task_status、org_route、employee_card、handoff block。
 - 长任务恢复：任务写入 `wp_task_run`、`wp_task_event`、`wp_task_checkpoint`，支持恢复、取消、转派和审核。

@@ -101,19 +101,39 @@ flowchart LR
 | 解析 | 系统按文件类型调用解析引擎 | `parse_status=SUCCESS/FAILED` | `ds_parse_artifact`、`ds_document_audit` |
 | 校正/重解析 | 人工修正文档解析内容，重新解析 | `parse_attempt_count` 增加 | `ds_document_version` |
 | 生成 Wiki | 将解析内容转为 LLM Wiki | `ks_pipeline_job.status=completed` | `ks_pipeline_job`、`ks_wiki_page` |
-| 写入 RAG | 生成 chunk、embedding、索引记录 | `ks_sync_job.status=completed` | `ks_chunk`、`ks_index_record` |
+| 写入 RAG | 生成 chunk、embedding、索引记录 | `ks_sync_job.status=success` | `ks_chunk`、`ks_index_record` |
 | 待审核 | 提交管理员审核 | `status=PENDING_AUDIT` | `ds_document_audit` |
 | 发布 | 管理员审核发布 | `status=PUBLISHED` | `ds_document` |
 | 驳回 | 管理员驳回 | `status=REJECTED` | `ds_document_audit` |
 | 修订 | 从已发布文档创建新草稿 | 新文档 `status=RAG_READY` | `ds_document`、`ds_document_version` |
 | 锁定 | 禁止继续编辑当前版本 | `status=LOCKED` | `ds_document` |
+| 删除 | 管理员可删除已发布/锁定文档，普通文档按权限删除 | `deleted=1`，关联 Wiki/RAG 标记 `deleted` | `ds_document`、`ks_wiki_page`、`ks_chunk`、`ks_index_record`、`ks_pipeline_job` |
 
 ### 2.3 管理台上传到 LLM Wiki 的验证路径
 
 1. 登录硅基猿猴俱乐部管理台。
-2. 上传 `docx/pdf/pptx` 等已配置解析引擎的文件。
+2. 上传 `docx/pdf/pptx/md/txt/sql/log/html` 等已配置解析引擎的文件。
 3. 在文档列表确认解析成功：`parse_status=SUCCESS`。
-4. 调用知识流水线，将文档生成 LLM Wiki：
+4. 在文档列表点击 `生成 Wiki` / `生成 Wiki 入 RAG`，或调用文档级知识流水线接口：
+
+```http
+POST http://localhost:8080/api/documents/{documentId}/to-wiki
+Authorization: Bearer <登录后 token>
+Content-Type: application/json
+
+{
+  "publish": true
+}
+```
+
+后台合并入口也可用于排障：
+
+```http
+POST http://localhost:8080/api/knowledge-pipeline/documents/{documentId}/to-wiki
+Authorization: Bearer <登录后 token>
+```
+
+独立 Worker 补偿入口：
 
 ```http
 POST http://localhost:8093/api/pipeline/documents/{documentId}/to-wiki
@@ -126,40 +146,97 @@ Content-Type: application/json
 }
 ```
 
-也可以走后端合并入口：
-
-```http
-POST http://localhost:8080/api/knowledge-pipeline/documents/{documentId}/to-wiki
-Authorization: Bearer <登录后 token>
-```
-
 5. 验证 Wiki 已生成并同步 RAG：
 
 - `ks_pipeline_job.status=completed`
 - `ks_wiki_page.status=active`
-- `ks_wiki_page.sync_status=indexed`
-- `ks_sync_job.status=completed`
+- `ks_wiki_page.sync_status=synced`
+- `ks_sync_job.status=success`
 - `ks_chunk.knowledge_status=active`
+- `ks_acl_policy`、`ks_acl_binding` 有对应文档版本的知识 ACL
 
-### 2.4 组织与人力中心、客户会员中心
+### 2.4 文档删除与知识清理
 
-1. 在管理台进入 `组织与人力中心`，可查看公司组织树，维护 AI 员工编码、名称、部门、岗位、职责、技能、联系人关系、个人记忆策略、模型配置、成本基线和启停状态。
-2. 在同一页面勾选岗位知识，保存后会写入 AI 员工与岗位知识绑定关系。岗位知识由 `Wiki 中心` 的页面组成，不单独复制知识正文。
-3. 进入 `客户会员中心`，选择客户后维护可见部门、可见员工、可咨询和可派活权限。
-4. Worker Platform 启动时会把管理台 `ds_department`、`ds_ai_employee`、`hr_*`、`customer_*` 投影到 `wp_org_unit`、`wp_ai_employee`、`wp_org_relation`、`wp_employee_permission`。
-5. 文档点击 `同步 RAG` 后，会直接写入 `ks_chunk`、`ks_index_record`、`ks_sync_job`；文档生成并发布 Wiki 后，也会同步写入同一套 RAG 索引账本。
-6. 进入 `RAG 管理台`，先选择 AI 员工，系统会自动带出该员工的 `actorId`、部门和岗位编码。
-7. `索引 Chunk 治理` 会展示最近 active chunk。点击其中一条可直接把标题/预览带入检索问题，用于验证新入库文档或 Wiki 是否已可被 RAG 召回。
-8. 在 `RAG 管理台` 可以查看和维护 `ks_acl_policy`、`ks_acl_binding`，也可以调整 chunk 的 ACL 策略、部门标签、岗位标签、密级和知识状态。
-9. RAG 管理台请求从管理台后端 `http://localhost:8080/api/retrieval/debug` 代理到 retrieval-service，业务测试不需要直连 `8090`。
+1. 普通上传或驳回文档：具备 `document.delete` 且拥有文档删除权限的用户可以删除。
+2. 已发布或锁定文档：仅管理员可删除；待审核文档需要先驳回再删除。
+3. 删除文档时，系统会同步清理文档生成的 LLM Wiki 和 RAG 派生内容：
+   - `ds_document.deleted=1`
+   - `ks_wiki_page.status=deleted`、`deleted=1`、正文和摘要清空
+   - `ks_wiki_page_version.content` 清空并标记 `status=deleted`
+   - `ks_wiki_relation` 和 `ks_position_package_item` 中关联该 Wiki 的记录移除
+   - `ks_chunk.knowledge_status=deleted`，chunk 文本、摘要和 embedding 清空
+   - `ks_index_record.index_status=deleted`
+   - `ks_pipeline_job.job_type=document_knowledge_delete` 记录本次清理结果
 
-### 2.5 Wiki 中心与岗位知识管理
+删除后可用以下 SQL 检查三端一致性：
+
+```sql
+SELECT id, name, deleted FROM ds_document WHERE id = <document_id>;
+SELECT id, title, status, deleted, LENGTH(content) AS content_length
+FROM ks_wiki_page
+WHERE id IN (
+  SELECT target_id FROM ks_pipeline_job
+  WHERE job_type = 'document_to_wiki' AND source_id = <document_id>
+);
+SELECT knowledge_status, COUNT(*) FROM ks_chunk
+WHERE source_id = <document_id>
+   OR wiki_page_id IN (
+      SELECT target_id FROM ks_pipeline_job
+      WHERE job_type = 'document_to_wiki' AND source_id = <document_id>
+   )
+GROUP BY knowledge_status;
+```
+
+### 2.5 组织与人力中心、客户会员中心
+
+1. 在管理台进入 `组织与人力中心`，左侧公司组织可点击筛选；右侧默认只展示在岗 AI 员工，可勾选 `显示离职/下线` 查看历史员工。
+2. 点击员工 `配置`，可维护 AI 员工编码、名称、部门、岗位、职责、审核通过技能、个人记忆策略、模型配置、成本基线、岗位知识和考核规则。
+3. 点击员工 `下线` 会将员工标记为离职/下线，清理 `ks_task_memory`、`ks_runtime_session` 等个人记忆数据，并移除客户可见性；其已经产生的文档、Wiki、RAG 资产作者归属不变。
+4. 在 `绩效与成本` 区域查看员工 Token 消耗、记忆容量、任务数、候选 Wiki 数和考核指标。
+5. 进入 `技能仓库`，可维护技能编码、部门、类型、等级、调用方式、输入输出 Schema、编排配置和安全规则；技能需要提交审核并通过后，才能在员工配置中勾选绑定。
+6. 高级技能通过 `skillLevel=advanced` 标记，第一版由管理台管理员维护开放边界，worker platform 投影后再结合员工权限使用。
+7. 进入 `客户会员中心`，选择客户后维护可见部门、可见员工、可咨询和可派活权限。
+8. Worker Platform 启动时会把管理台 `ds_department`、`ds_ai_employee`、`hr_*`、`customer_*` 投影到 `wp_org_unit`、`wp_ai_employee`、`wp_org_relation`、`wp_worker_skill`、`wp_skill_binding`、`wp_employee_permission`。
+9. 文档解析成功后默认点击 `生成 Wiki`，系统会先生成或更新 LLM Wiki，再发布并写入 `ks_chunk`、`ks_index_record`、`ks_sync_job`；直推 RAG 仅作为兼容/排障入口。
+10. 进入 `RAG 管理台`，先选择 AI 员工，系统会自动带出该员工的 `actorId`、部门和岗位编码。
+11. `索引 Chunk 治理` 会展示最近 active chunk。点击其中一条可直接把标题/预览带入检索问题，用于验证新入库文档或 Wiki 是否已可被 RAG 召回。
+12. 在 `RAG 管理台` 可以查看和维护 `ks_acl_policy`、`ks_acl_binding`，也可以调整 chunk 的 ACL 策略、部门标签、岗位标签、密级和知识状态。
+13. RAG 管理台请求从管理台后端 `http://localhost:8080/api/retrieval/debug` 代理到 retrieval-service，业务测试不需要直连 `8090`。
+
+常用数据库检查：
+
+```sql
+-- 员工生命周期与下线原因
+SELECT id, code, name, enabled, status, performance_status, offline_reason, left_at
+FROM ds_ai_employee
+ORDER BY updated_at DESC;
+
+-- 员工考核规则与计量
+SELECT * FROM hr_employee_assessment_rule WHERE ai_employee_id = <employee_id>;
+SELECT ai_employee_id, SUM(total_tokens) AS total_tokens, SUM(memory_items) AS memory_items
+FROM hr_employee_usage_meter
+GROUP BY ai_employee_id;
+
+-- 技能仓库与员工绑定
+SELECT id, code, name, skill_level, review_status, enabled FROM hr_skill_repository ORDER BY updated_at DESC;
+SELECT b.ai_employee_id, e.name AS employee_name, s.name AS skill_name
+FROM hr_skill_binding b
+JOIN ds_ai_employee e ON e.id = b.ai_employee_id
+JOIN hr_skill_repository s ON s.id = b.skill_id
+WHERE b.enabled = 1;
+
+-- worker platform 运行时投影
+SELECT code, name, enabled FROM wp_worker_skill ORDER BY code;
+SELECT employee_id, skill_id, enabled FROM wp_skill_binding ORDER BY employee_id, skill_id;
+```
+
+### 2.6 Wiki 中心与岗位知识管理
 
 1. `Wiki 中心` 负责 Wiki 页面增删改查、发布同步 RAG、归档和删除。
 2. `岗位知识管理` 基于 Wiki 页面勾选岗位知识范围，支持草稿、提交审核、审核通过、驳回、归档和删除。
 3. AI 员工绑定的是岗位知识对象；运行时再从岗位知识对象读取 Wiki 页面集合、必读标记和默认检索范围。
 
-### 2.6 Wiki 中心结构化工作台
+### 2.7 Wiki 中心结构化工作台
 
 1. 进入 `Wiki 中心` 后，页面分为三栏：左侧结构分组树、中间 Wiki 页面列表、右侧详情和知识图谱关系。
 2. 左侧默认按 `部门 / 类型 / 状态` 聚合，也可切换为 `类型 / 状态`。点击任意分组后，页面列表会按该分组过滤。
@@ -235,7 +312,7 @@ AI 员工平台聊天记录不是纯文本，消息由 block 组成：
 | `delete` | 删除文件或目录 |
 | `manage` | 管理目录或文档权限 |
 | `correct` | 修正解析结果 |
-| `push_rag` | 推送或触发 RAG 同步 |
+| `push_rag` | 触发文档生成 LLM Wiki 并同步 RAG，权限码保留旧名用于兼容 |
 | `request_audit` | 提交审核 |
 | `publish` | 审核发布 |
 | `reject` | 审核驳回 |
@@ -281,6 +358,14 @@ ORDER BY installed_rank;
 期望看到 V1-V6 均为 `success=true`。
 
 ### 5.3 文档上传与解析
+
+查看当前解析器绑定：
+
+```sql
+SELECT file_extension, engine_code, engine_name, is_default, enabled, sort_order
+FROM ds_parse_engine_binding
+ORDER BY file_extension, sort_order;
+```
 
 ```sql
 SELECT id, name, status, parse_status, parse_engine,
@@ -559,7 +644,7 @@ curl http://localhost:8093/health
 | 文件可上传 | 文档列表出现新文件 |
 | 文件可解析 | `parse_status=SUCCESS` |
 | 文件可生成 Wiki | `ks_pipeline_job.status=completed` |
-| Wiki 可索引 | `ks_wiki_page.sync_status=indexed` |
+| Wiki 可索引 | `ks_wiki_page.sync_status=synced` |
 | RAG 可召回 | 检索结果包含目标 Wiki 的 chunk |
 | 权限可生效 | 无权限用户不能查看/删除受限文档 |
 | 审计可追踪 | `ds_document_audit` 或 `ks_audit_trace` 有记录 |
@@ -579,7 +664,7 @@ curl http://localhost:8093/health
 | 页面打不开 | 前端是否启动、后端 `8080` 是否可访问 |
 | 登录失败 | 账号密码、`sys_user.enabled`、后端日志 |
 | 上传后不解析 | 文件类型是否有解析引擎绑定，查看 `parse_status` 与 `parse_error_message` |
-| 生成 Wiki 失败 | 查看 `ks_pipeline_job.error_message`、`sac-knowledge-pipeline-worker` 日志 |
+| 生成 Wiki 失败 | 查看 `ks_pipeline_job.error_message`、`sac-siliconapeclub-server` 日志；独立 Worker 补偿失败再看 `sac-knowledge-pipeline-worker` |
 | RAG 查不到 | 查看 `ks_sync_job`、`ks_chunk.knowledge_status`、权限标签 |
 | 权限不符合预期 | 查看 `ds_folder_permission`、`ds_document_permission`、`sys_role_permission` |
 | AI 员工平台打不开 | 查看 `sac-siliconapeclub-worker-front` 是否运行、`3011` 是否被占用 |

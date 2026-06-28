@@ -4,7 +4,7 @@ MERGE INTO sys_role (id, code, name, description, enabled, built_in, admin_role)
 
 MERGE INTO sys_menu (id, parent_id, code, name, type, route_key, icon, sort_order, enabled) KEY(id) VALUES
     (1, NULL, 'dashboard.view', '工作台', 'page', 'dashboard', 'dashboard', 10, 1),
-    (2, NULL, 'library.view', '文档库', 'page', 'library', 'library', 20, 1),
+    (2, NULL, 'library.view', '文档管理', 'page', 'library', 'library', 20, 1),
     (3, NULL, 'search.view', '全局搜索', 'page', 'search', 'search', 30, 1),
     (4, NULL, 'permission_management.view', '权限管理', 'page', 'permission', 'shield', 40, 1),
     (5, 4, 'permission.menu.view', '菜单管理', 'page', 'permission_menus', 'menu', 10, 1),
@@ -18,7 +18,7 @@ MERGE INTO sys_menu (id, parent_id, code, name, type, route_key, icon, sort_orde
     (13, 2, 'folder.permission.manage', '管理目录权限', 'action', NULL, NULL, 40, 1),
     (14, 2, 'document.view', '查看文档', 'action', NULL, NULL, 50, 1),
     (15, 2, 'document.correct', '校正文档', 'action', NULL, NULL, 60, 1),
-    (16, 2, 'document.push_rag', '推送知识库', 'action', NULL, NULL, 70, 1),
+    (16, 2, 'document.push_rag', '生成 Wiki/RAG', 'action', NULL, NULL, 70, 1),
     (17, 2, 'document.request_audit', '提交审核', 'action', NULL, NULL, 80, 1),
     (18, 2, 'document.publish', '审核发布', 'action', NULL, NULL, 90, 1),
     (19, 2, 'document.reject', '审核驳回', 'action', NULL, NULL, 100, 1),

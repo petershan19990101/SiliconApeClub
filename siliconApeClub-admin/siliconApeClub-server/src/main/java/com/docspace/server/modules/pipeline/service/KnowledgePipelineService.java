@@ -5,6 +5,7 @@ import com.docspace.server.common.enums.DocumentStatus;
 import com.docspace.server.common.enums.JobStatus;
 import com.docspace.server.common.exception.BusinessException;
 import com.docspace.server.common.util.JsonUtils;
+import com.docspace.server.infrastructure.cache.CacheService;
 import com.docspace.server.modules.audit.service.AuditTraceService;
 import com.docspace.server.modules.document.service.DocumentSupportService;
 import com.docspace.server.modules.knowledge.service.KnowledgeService;
@@ -23,7 +24,6 @@ import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
@@ -37,6 +37,7 @@ public class KnowledgePipelineService {
     private final DocumentSupportService documentSupportService;
     private final AuditTraceService auditTraceService;
     private final NotificationService notificationService;
+    private final CacheService cacheService;
 
     public List<Map<String, Object>> listJobs(String status, int limit) {
         int safeLimit = Math.max(1, Math.min(limit, 200));
@@ -62,7 +63,6 @@ public class KnowledgePipelineService {
                 knowledgeService.rowMapper(), id);
     }
 
-    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> documentToWiki(Long documentId, DocumentToWikiRequest request, SecurityUser currentUser) {
         DocumentToWikiRequest safeRequest = request == null ? new DocumentToWikiRequest() : request;
         DocumentEntity document = documentSupportService.getRequiredDocument(documentId);
@@ -74,10 +74,21 @@ public class KnowledgePipelineService {
         }
 
         Long jobId = createJob(document, currentUser);
+        markDocumentRagRunning(document, currentUser);
         try {
-            Map<String, Object> wikiPage = wikiService.createPage(buildWikiRequest(document, safeRequest), currentUser);
+            WikiPageRequest wikiRequest = buildWikiRequest(document, safeRequest);
+            Long existingWikiPageId = findExistingWikiPageId(document);
+            Map<String, Object> wikiPage = existingWikiPageId == null
+                    ? wikiService.createPage(wikiRequest, currentUser)
+                    : wikiService.updatePage(existingWikiPageId, wikiRequest, currentUser);
             Long wikiPageId = asLong(wikiPage.get("id"));
-            if (!Boolean.FALSE.equals(safeRequest.getPublish())) {
+            jdbcTemplate.update(
+                    "UPDATE ks_pipeline_job SET target_type = 'wiki_page', target_id = ?, updated_at = ? WHERE id = ?",
+                    wikiPageId,
+                    LocalDateTime.now(),
+                    jobId);
+            boolean publish = !Boolean.FALSE.equals(safeRequest.getPublish());
+            if (publish) {
                 wikiPage = wikiService.publish(wikiPageId, currentUser);
             }
             Map<String, Object> syncStatus = wikiService.syncStatus(wikiPageId);
@@ -85,6 +96,8 @@ public class KnowledgePipelineService {
             result.put("documentId", document.getId());
             result.put("documentVersion", document.getCurrentVersion());
             result.put("wikiPageId", wikiPageId);
+            result.put("reusedWikiPage", existingWikiPageId != null);
+            result.put("published", publish);
             result.put("wikiStatus", wikiPage.get("status"));
             result.put("wikiSyncStatus", wikiPage.get("syncStatus"));
             result.put("chunkCount", syncStatus.get("chunkCount"));
@@ -98,9 +111,14 @@ public class KnowledgePipelineService {
                     LocalDateTime.now(),
                     LocalDateTime.now(),
                     jobId);
-            markDocumentRagReady(document, currentUser);
+            if (publish) {
+                markDocumentRagReady(document, currentUser);
+            } else {
+                markDocumentRagIdle(document);
+            }
             documentSupportService.addAudit(document.getId(), document.getCurrentVersion(), AuditAction.PIPELINE_TO_WIKI, currentUser,
                     "解析产物已生成 LLM Wiki 页面 #" + wikiPageId);
+            documentSupportService.publishEvent(AuditAction.PIPELINE_TO_WIKI, document, currentUser);
             auditTraceService.record(currentUser, "knowledge_pipeline.document_to_wiki", "document", document.getId(), "success", result);
             notificationService.createForUser(
                     currentUser == null ? null : currentUser.getId(),
@@ -113,6 +131,7 @@ public class KnowledgePipelineService {
             Map<String, Object> metadata = new LinkedHashMap<String, Object>();
             metadata.put("documentId", documentId);
             metadata.put("error", ex.getMessage());
+            markDocumentRagFailed(document, currentUser, ex.getMessage());
             jdbcTemplate.update(
                     "UPDATE ks_pipeline_job SET status = 'failed', error_message = ?, finished_at = ?, updated_at = ? WHERE id = ?",
                     ex.getMessage(),
@@ -140,6 +159,20 @@ public class KnowledgePipelineService {
                 currentUser == null ? null : currentUser.getId(),
                 LocalDateTime.now(),
                 LocalDateTime.now());
+    }
+
+    private Long findExistingWikiPageId(DocumentEntity document) {
+        List<Long> ids = jdbcTemplate.queryForList(
+                "SELECT j.target_id FROM ks_pipeline_job j " +
+                        "JOIN ks_wiki_page p ON p.id = j.target_id AND p.deleted = 0 " +
+                        "WHERE j.job_type = 'document_to_wiki' AND j.source_type = 'document' " +
+                        "AND j.source_id = ? AND j.source_version = ? AND j.target_type = 'wiki_page' " +
+                        "AND j.status IN ('completed', 'failed') AND j.target_id IS NOT NULL " +
+                        "ORDER BY j.finished_at DESC, j.id DESC LIMIT 1",
+                Long.class,
+                document.getId(),
+                document.getCurrentVersion());
+        return ids.isEmpty() ? null : ids.get(0);
     }
 
     private WikiPageRequest buildWikiRequest(DocumentEntity document, DocumentToWikiRequest request) {
@@ -172,8 +205,49 @@ public class KnowledgePipelineService {
         wikiRequest.setMetadata(metadata);
         wikiRequest.setTags(tags);
         wikiRequest.setDepartmentId(document.getDepartmentId());
-        wikiRequest.setAclPolicyId(1L);
+        wikiRequest.setAclPolicyId(resolveAclPolicyId(document));
         return wikiRequest;
+    }
+
+    private Long resolveAclPolicyId(DocumentEntity document) {
+        String policyName = "文档知识 ACL #" + document.getId() + " v" + document.getCurrentVersion();
+        List<Long> existing = jdbcTemplate.queryForList(
+                "SELECT id FROM ks_acl_policy WHERE policy_name = ? ORDER BY id DESC LIMIT 1",
+                Long.class,
+                policyName);
+        Long policyId;
+        if (existing.isEmpty()) {
+            policyId = jdbcTemplate.queryForObject(
+                    "INSERT INTO ks_acl_policy(policy_name, security_level, status) VALUES (?, 'internal', 'active') RETURNING id",
+                    Long.class,
+                    policyName);
+        } else {
+            policyId = existing.get(0);
+            jdbcTemplate.update(
+                    "UPDATE ks_acl_policy SET acl_version = acl_version + 1, status = 'active', updated_at = ? WHERE id = ?",
+                    LocalDateTime.now(),
+                    policyId);
+        }
+
+        jdbcTemplate.update("DELETE FROM ks_acl_binding WHERE policy_id = ?", policyId);
+        jdbcTemplate.update(
+                "INSERT INTO ks_acl_binding(policy_id, principal_type, principal_id, action, effect) VALUES (?, 'department', ?, 'use_in_rag', 'allow')",
+                policyId,
+                String.valueOf(document.getDepartmentId()));
+        List<Map<String, Object>> permissions = jdbcTemplate.query(
+                "SELECT user_id, permissions_json FROM ds_document_permission WHERE document_id = ?",
+                knowledgeService.rowMapper(),
+                document.getId());
+        for (Map<String, Object> permission : permissions) {
+            List<String> actions = jsonUtils.readList(String.valueOf(permission.get("permissionsJson")), String.class);
+            if (actions.contains("view")) {
+                jdbcTemplate.update(
+                        "INSERT INTO ks_acl_binding(policy_id, principal_type, principal_id, action, effect) VALUES (?, 'user', ?, 'use_in_rag', 'allow')",
+                        policyId,
+                        String.valueOf(permission.get("userId")));
+            }
+        }
+        return policyId;
     }
 
     private String buildWikiContent(DocumentEntity document, String title) {
@@ -190,13 +264,51 @@ public class KnowledgePipelineService {
     private void markDocumentRagReady(DocumentEntity document, SecurityUser currentUser) {
         document.setRagStatus(JobStatus.SUCCESS.name());
         document.setRagFinishedAt(LocalDateTime.now());
-        document.setRagAttemptCount(documentSupportService.optionalInteger(document.getRagAttemptCount()) + 1);
         document.setRagLastRunBy(currentUser == null ? null : currentUser.getDisplayName());
         if (!DocumentStatus.PUBLISHED.name().equals(document.getStatus())) {
             document.setStatus(DocumentStatus.RAG_READY.name());
         }
         document.setUpdatedAt(LocalDateTime.now());
         documentMapper.updateById(document);
+        evictDashboardCache();
+    }
+
+    private void markDocumentRagRunning(DocumentEntity document, SecurityUser currentUser) {
+        document.setRagStatus(JobStatus.RUNNING.name());
+        document.setRagStartedAt(LocalDateTime.now());
+        document.setRagFinishedAt(null);
+        document.setRagErrorMessage(null);
+        document.setRagAttemptCount(documentSupportService.optionalInteger(document.getRagAttemptCount()) + 1);
+        document.setRagLastRunBy(currentUser == null ? null : currentUser.getDisplayName());
+        document.setUpdatedAt(LocalDateTime.now());
+        documentMapper.updateById(document);
+        evictDashboardCache();
+    }
+
+    private void markDocumentRagIdle(DocumentEntity document) {
+        document.setRagStatus(JobStatus.IDLE.name());
+        document.setRagStartedAt(null);
+        document.setRagFinishedAt(null);
+        document.setRagErrorMessage(null);
+        document.setUpdatedAt(LocalDateTime.now());
+        documentMapper.updateById(document);
+        evictDashboardCache();
+    }
+
+    private void markDocumentRagFailed(DocumentEntity document, SecurityUser currentUser, String errorMessage) {
+        document.setRagStatus(JobStatus.FAILED.name());
+        document.setRagFinishedAt(LocalDateTime.now());
+        document.setRagErrorMessage(errorMessage);
+        document.setRagLastRunBy(currentUser == null ? null : currentUser.getDisplayName());
+        document.setUpdatedAt(LocalDateTime.now());
+        documentMapper.updateById(document);
+        evictDashboardCache();
+    }
+
+    private void evictDashboardCache() {
+        cacheService.evict("dashboard:stats");
+        cacheService.evict("dashboard:activities:5");
+        cacheService.evict("dashboard:activities:10");
     }
 
     private String summarize(String text) {

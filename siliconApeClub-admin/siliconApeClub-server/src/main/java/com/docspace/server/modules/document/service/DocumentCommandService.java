@@ -3,6 +3,7 @@ package com.docspace.server.modules.document.service;
 import com.docspace.server.common.enums.AuditAction;
 import com.docspace.server.common.enums.DocumentStatus;
 import com.docspace.server.common.enums.JobStatus;
+import com.docspace.server.common.enums.UserRole;
 import com.docspace.server.common.exception.BusinessException;
 import com.docspace.server.common.util.JsonUtils;
 import com.docspace.server.infrastructure.cache.CacheService;
@@ -14,8 +15,8 @@ import com.docspace.server.modules.document.dto.RejectAuditRequest;
 import com.docspace.server.modules.document.dto.SaveCorrectionRequest;
 import com.docspace.server.modules.document.dto.StartParseRequest;
 import com.docspace.server.modules.knowledge.service.KnowledgeService;
-import com.docspace.server.modules.wiki.dto.WikiPageRequest;
-import com.docspace.server.modules.wiki.service.WikiService;
+import com.docspace.server.modules.pipeline.dto.DocumentToWikiRequest;
+import com.docspace.server.modules.pipeline.service.KnowledgePipelineService;
 import com.docspace.server.persistence.entity.DocumentEntity;
 import com.docspace.server.persistence.entity.DocumentVersionEntity;
 import com.docspace.server.persistence.entity.FolderEntity;
@@ -25,9 +26,13 @@ import com.docspace.server.persistence.mapper.FolderMapper;
 import com.docspace.server.security.SecurityUser;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import lombok.RequiredArgsConstructor;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -47,14 +52,23 @@ public class DocumentCommandService {
     private final JsonUtils jsonUtils;
     private final CacheService cacheService;
     private final KnowledgeService knowledgeService;
-    private final WikiService wikiService;
+    private final KnowledgePipelineService knowledgePipelineService;
+    private final JdbcTemplate jdbcTemplate;
 
     @Transactional(rollbackFor = Exception.class)
     public List<DocumentDto> uploadDocuments(MultipartFile[] files, Long folderId, SecurityUser currentUser) {
         if (currentUser == null || currentUser.getDepartmentId() == null) {
             throw new BusinessException("当前用户未绑定部门，无法上传文档");
         }
-        return uploadDocumentsWithDepartment(files, currentUser.getDepartmentId(), folderId, currentUser);
+        Long departmentId = currentUser.getDepartmentId();
+        if (folderId != null) {
+            FolderEntity folder = folderMapper.selectById(folderId);
+            if (folder == null || (folder.getDeleted() != null && folder.getDeleted() == 1)) {
+                throw new BusinessException("当前目录不存在: " + folderId);
+            }
+            departmentId = folder.getDepartmentId();
+        }
+        return uploadDocumentsWithDepartment(files, departmentId, folderId, currentUser);
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -172,7 +186,7 @@ public class DocumentCommandService {
         versionEntity.setEngine(parseResult.getEngineName());
         versionEntity.setAuthor(currentUser.getDisplayName());
         versionEntity.setStatus("draft");
-        versionEntity.setSummary("重新解析完成，等待手动推送RAG");
+        versionEntity.setSummary("重新解析完成，等待生成 LLM Wiki 并同步 RAG");
         versionEntity.setCreatedAt(finishedAt);
         documentVersionMapper.insert(versionEntity);
 
@@ -272,7 +286,7 @@ public class DocumentCommandService {
             documentVersionMapper.updateById(currentVersion);
         }
         documentSupportService.addAudit(document.getId(), document.getCurrentVersion(), AuditAction.PUBLISH, currentUser, "发布到知识库");
-        createWikiDraftForPublishedDocument(document, currentUser);
+        ensureWikiPipelineForPublishedDocument(document, currentUser);
         documentSupportService.publishEvent(AuditAction.PUBLISH, document, currentUser);
         evictDashboardCache();
         return documentSupportService.toDocumentDto(documentSupportService.getRequiredDocument(id));
@@ -382,13 +396,12 @@ public class DocumentCommandService {
         List<DocumentEntity> documents = documentMapper.selectBatchIds(ids);
         for (DocumentEntity document : documents) {
             permissionSupportService.ensureCanDeleteDocument(document.getId(), currentUser);
-            if (DocumentStatus.PENDING_AUDIT.name().equals(document.getStatus()) || DocumentStatus.PUBLISHED.name().equals(document.getStatus())) {
-                throw new BusinessException("待审核或已发布文档不允许直接删除: " + document.getName());
-            }
+            ensureDocumentDeletionAllowed(document, currentUser);
+            cleanupDocumentKnowledge(document, currentUser);
             document.setDeleted(1);
             document.setUpdatedAt(LocalDateTime.now());
             documentMapper.updateById(document);
-            documentSupportService.addAudit(document.getId(), document.getCurrentVersion(), AuditAction.DELETE, currentUser, "鎵归噺鍒犻櫎鏂囨。");
+            documentSupportService.addAudit(document.getId(), document.getCurrentVersion(), AuditAction.DELETE, currentUser, "批量删除文档，并清理关联 Wiki/RAG");
         }
         evictDashboardCache();
     }
@@ -397,14 +410,140 @@ public class DocumentCommandService {
     public void deleteDocument(Long id, SecurityUser currentUser) {
         permissionSupportService.ensureCanDeleteDocument(id, currentUser);
         DocumentEntity document = documentSupportService.getRequiredDocument(id);
-        if (DocumentStatus.PENDING_AUDIT.name().equals(document.getStatus()) || DocumentStatus.PUBLISHED.name().equals(document.getStatus())) {
-            throw new BusinessException("待审核或已发布文档不允许直接删除: " + document.getName());
-        }
+        ensureDocumentDeletionAllowed(document, currentUser);
+        cleanupDocumentKnowledge(document, currentUser);
         document.setDeleted(1);
         document.setUpdatedAt(LocalDateTime.now());
         documentMapper.updateById(document);
-        documentSupportService.addAudit(document.getId(), document.getCurrentVersion(), AuditAction.DELETE, currentUser, "删除文档");
+        documentSupportService.addAudit(document.getId(), document.getCurrentVersion(), AuditAction.DELETE, currentUser, "删除文档，并清理关联 Wiki/RAG");
         evictDashboardCache();
+    }
+
+    private void ensureDocumentDeletionAllowed(DocumentEntity document, SecurityUser currentUser) {
+        if (DocumentStatus.PENDING_AUDIT.name().equals(document.getStatus())) {
+            throw new BusinessException("待审核文档请先驳回后再删除: " + document.getName());
+        }
+        boolean publishedOrLocked = DocumentStatus.PUBLISHED.name().equals(document.getStatus())
+                || DocumentStatus.LOCKED.name().equals(document.getStatus());
+        if (publishedOrLocked && (currentUser == null || currentUser.getRole() != UserRole.ADMIN)) {
+            throw new BusinessException("已发布或锁定文档仅管理员可删除: " + document.getName());
+        }
+    }
+
+    private void cleanupDocumentKnowledge(DocumentEntity document, SecurityUser currentUser) {
+        LocalDateTime now = LocalDateTime.now();
+        List<Long> wikiPageIds = findDocumentWikiPageIds(document);
+        int wikiPageCount = 0;
+        int wikiVersionCount = 0;
+        int chunkCount = 0;
+        int indexRecordCount = 0;
+
+        for (Long wikiPageId : wikiPageIds) {
+            wikiPageCount += jdbcTemplate.update(
+                    "UPDATE ks_wiki_page SET content = '', summary = '', deleted = 1, status = 'deleted', " +
+                            "sync_status = 'deleted', health_status = 'unknown', updated_at = ? WHERE id = ?",
+                    now,
+                    wikiPageId);
+            wikiVersionCount += jdbcTemplate.update(
+                    "UPDATE ks_wiki_page_version SET content = '', status = 'deleted', summary = ? WHERE page_id = ?",
+                    "源文档已删除，版本内容已清空",
+                    wikiPageId);
+            jdbcTemplate.update("DELETE FROM ks_wiki_relation WHERE source_page_id = ? OR target_page_id = ?", wikiPageId, wikiPageId);
+            jdbcTemplate.update("DELETE FROM ks_position_package_item WHERE item_type = 'wiki_page' AND item_id = ?", wikiPageId);
+            jdbcTemplate.update(
+                    "UPDATE ks_knowledge_object SET content = '', status = 'deleted', updated_at = ? WHERE page_id = ?",
+                    now,
+                    wikiPageId);
+            chunkCount += jdbcTemplate.update(
+                    "UPDATE ks_chunk SET knowledge_status = 'deleted', chunk_text = '', chunk_summary = '', embedding = NULL, updated_at = ? " +
+                            "WHERE wiki_page_id = ?",
+                    now,
+                    wikiPageId);
+            indexRecordCount += jdbcTemplate.update(
+                    "UPDATE ks_index_record SET index_status = 'deleted', index_error = ?, updated_at = ? WHERE wiki_page_id = ?",
+                    "源文档已删除，索引已清空",
+                    now,
+                    wikiPageId);
+            disableDocumentAclPolicy(wikiPageId, now);
+        }
+
+        chunkCount += jdbcTemplate.update(
+                "UPDATE ks_chunk SET knowledge_status = 'deleted', chunk_text = '', chunk_summary = '', embedding = NULL, updated_at = ? " +
+                        "WHERE source_type = 'document' AND source_id = ?",
+                now,
+                document.getId());
+        indexRecordCount += jdbcTemplate.update(
+                "UPDATE ks_index_record SET index_status = 'deleted', index_error = ?, updated_at = ? " +
+                        "WHERE source_type = 'document' AND source_id = ?",
+                "源文档已删除，索引已清空",
+                now,
+                document.getId());
+
+        Map<String, Object> result = new LinkedHashMap<String, Object>();
+        result.put("documentId", document.getId());
+        result.put("documentVersion", document.getCurrentVersion());
+        result.put("wikiPageIds", wikiPageIds);
+        result.put("wikiPageCount", wikiPageCount);
+        result.put("wikiVersionCount", wikiVersionCount);
+        result.put("chunkCount", chunkCount);
+        result.put("indexRecordCount", indexRecordCount);
+        jdbcTemplate.update(
+                "INSERT INTO ks_pipeline_job(job_type, source_type, source_id, source_version, target_type, status, attempt_count, result_json, created_by, started_at, finished_at, updated_at) " +
+                        "VALUES ('document_knowledge_delete', 'document', ?, ?, 'wiki_page', 'completed', 1, ?, ?, ?, ?, ?)",
+                document.getId(),
+                document.getCurrentVersion(),
+                jsonUtils.toJson(result),
+                currentUser == null ? null : currentUser.getId(),
+                now,
+                now,
+                now);
+    }
+
+    private List<Long> findDocumentWikiPageIds(DocumentEntity document) {
+        List<Long> wikiPageIds = new ArrayList<Long>();
+        wikiPageIds.addAll(jdbcTemplate.queryForList(
+                "SELECT DISTINCT target_id FROM ks_pipeline_job " +
+                        "WHERE job_type = 'document_to_wiki' AND source_type = 'document' AND source_id = ? " +
+                        "AND target_type = 'wiki_page' AND target_id IS NOT NULL",
+                Long.class,
+                document.getId()));
+        List<Long> metadataIds = jdbcTemplate.queryForList(
+                "SELECT id FROM ks_wiki_page WHERE page_type = 'document' AND metadata_json LIKE ?",
+                Long.class,
+                "%\"sourceDocumentId\":" + document.getId() + "%");
+        for (Long id : metadataIds) {
+            if (!wikiPageIds.contains(id)) {
+                wikiPageIds.add(id);
+            }
+        }
+        if (document.getName() != null && !document.getName().trim().isEmpty()) {
+            List<Long> titleIds = jdbcTemplate.queryForList(
+                    "SELECT id FROM ks_wiki_page WHERE page_type = 'document' AND title = ?",
+                    Long.class,
+                    document.getName().trim());
+            for (Long id : titleIds) {
+                if (!wikiPageIds.contains(id)) {
+                    wikiPageIds.add(id);
+                }
+            }
+        }
+        return wikiPageIds;
+    }
+
+    private void disableDocumentAclPolicy(Long wikiPageId, LocalDateTime now) {
+        List<Map<String, Object>> policies = jdbcTemplate.query(
+                "SELECT a.id, a.policy_name FROM ks_wiki_page p JOIN ks_acl_policy a ON a.id = p.acl_policy_id WHERE p.id = ?",
+                knowledgeService.rowMapper(),
+                wikiPageId);
+        for (Map<String, Object> policy : policies) {
+            String policyName = String.valueOf(policy.get("policyName"));
+            if (!policyName.startsWith("文档知识 ACL #")) {
+                continue;
+            }
+            Long policyId = ((Number) policy.get("id")).longValue();
+            jdbcTemplate.update("DELETE FROM ks_acl_binding WHERE policy_id = ?", policyId);
+            jdbcTemplate.update("UPDATE ks_acl_policy SET status = 'disabled', updated_at = ? WHERE id = ?", now, policyId);
+        }
     }
 
     private List<DocumentDto> uploadDocumentsWithDepartment(MultipartFile[] files,
@@ -510,7 +649,7 @@ public class DocumentCommandService {
         versionEntity.setEngine(parseEngineName);
         versionEntity.setAuthor(currentUser.getDisplayName());
         versionEntity.setStatus("draft");
-        versionEntity.setSummary(canParse ? "上传后自动解析完成" : "上传成功，当前文件类型未配置解析引擎");
+        versionEntity.setSummary(canParse ? "上传后自动解析完成，等待生成 LLM Wiki 并同步 RAG" : "上传成功，当前文件类型未配置解析引擎");
         versionEntity.setCreatedAt(LocalDateTime.now());
         documentVersionMapper.insert(versionEntity);
 
@@ -529,18 +668,20 @@ public class DocumentCommandService {
         cacheService.evict("dashboard:activities:10");
     }
 
-    private void createWikiDraftForPublishedDocument(DocumentEntity document, SecurityUser currentUser) {
-        try {
-            WikiPageRequest request = new WikiPageRequest();
-            request.setTitle(document.getName());
-            request.setPageType("document");
-            request.setSummary(document.getDescription());
-            request.setContent(document.getLatestParsedText() == null ? "" : document.getLatestParsedText());
-            request.setDepartmentId(document.getDepartmentId());
-            request.setAclPolicyId(1L);
-            wikiService.createPage(request, currentUser);
-        } catch (Exception ignored) {
-            // 文档发布不因 Wiki 草稿生成失败而回滚，后续可在知识健康中心补偿。
+    private void ensureWikiPipelineForPublishedDocument(DocumentEntity document, SecurityUser currentUser) {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(1) FROM ks_pipeline_job " +
+                        "WHERE job_type = 'document_to_wiki' AND source_type = 'document' " +
+                        "AND source_id = ? AND source_version = ? AND target_type = 'wiki_page' " +
+                        "AND status = 'completed' AND target_id IS NOT NULL",
+                Integer.class,
+                document.getId(),
+                document.getCurrentVersion());
+        if (count != null && count > 0) {
+            return;
         }
+        DocumentToWikiRequest request = new DocumentToWikiRequest();
+        request.setPublish(true);
+        knowledgePipelineService.documentToWiki(document.getId(), request, currentUser);
     }
 }

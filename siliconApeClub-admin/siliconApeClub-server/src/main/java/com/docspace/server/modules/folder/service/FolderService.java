@@ -4,19 +4,24 @@
 package com.docspace.server.modules.folder.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.docspace.server.common.enums.UserRole;
 import com.docspace.server.common.exception.BusinessException;
 import com.docspace.server.modules.document.dto.PermissionUpdateRequest;
 import com.docspace.server.modules.document.service.PermissionSupportService;
 import com.docspace.server.modules.folder.dto.CreateFolderRequest;
 import com.docspace.server.modules.folder.dto.FolderDeleteCheckDto;
 import com.docspace.server.modules.folder.dto.FolderDto;
-import com.docspace.server.persistence.entity.FolderEntity;
+import com.docspace.server.persistence.entity.DepartmentEntity;
 import com.docspace.server.persistence.entity.DocumentEntity;
+import com.docspace.server.persistence.entity.FolderEntity;
+import com.docspace.server.persistence.mapper.DepartmentMapper;
 import com.docspace.server.persistence.mapper.DocumentMapper;
 import com.docspace.server.persistence.mapper.FolderMapper;
 import com.docspace.server.security.SecurityUser;
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -28,6 +33,7 @@ public class FolderService {
 
     private final FolderMapper folderMapper;
     private final DocumentMapper documentMapper;
+    private final DepartmentMapper departmentMapper;
     private final PermissionSupportService permissionSupportService;
 
     /**
@@ -57,19 +63,17 @@ public class FolderService {
         if (currentUser.getDepartmentId() == null) {
             throw new BusinessException("当前用户未绑定所属部门，无法创建文件夹");
         }
+        Long targetDepartmentId = resolveTargetDepartmentId(request, currentUser);
         if (request.getParentId() != null) {
-            FolderEntity parentFolder = folderMapper.selectById(request.getParentId());
-            if (parentFolder == null) {
-                throw new BusinessException("父文件夹不存在: " + request.getParentId());
-            }
-            if (!currentUser.getDepartmentId().equals(parentFolder.getDepartmentId())) {
-                throw new BusinessException("不能在其他部门的文件夹下创建子文件夹");
+            FolderEntity parentFolder = getRequiredFolder(request.getParentId());
+            if (!isSameOrDescendantDepartment(targetDepartmentId, parentFolder.getDepartmentId())) {
+                throw new BusinessException("子文件夹所属部门必须是父文件夹部门或其下级部门");
             }
         }
 
         FolderEntity entity = new FolderEntity();
         entity.setName(request.getName().trim());
-        entity.setDepartmentId(currentUser.getDepartmentId());
+        entity.setDepartmentId(targetDepartmentId);
         entity.setParentId(request.getParentId());
         entity.setCreatedBy(currentUser.getId());
         entity.setCreatedAt(LocalDateTime.now());
@@ -134,5 +138,42 @@ public class FolderService {
             throw new BusinessException("目录不存在: " + id);
         }
         return folder;
+    }
+
+    private Long resolveTargetDepartmentId(CreateFolderRequest request, SecurityUser currentUser) {
+        Long targetDepartmentId = request.getDepartmentId();
+        if (targetDepartmentId == null && request.getParentId() != null) {
+            targetDepartmentId = getRequiredFolder(request.getParentId()).getDepartmentId();
+        }
+        if (targetDepartmentId == null) {
+            targetDepartmentId = currentUser.getDepartmentId();
+        }
+        DepartmentEntity department = departmentMapper.selectById(targetDepartmentId);
+        if (department == null) {
+            throw new BusinessException("所属部门不存在: " + targetDepartmentId);
+        }
+        if (currentUser.getRole() != UserRole.ADMIN && !targetDepartmentId.equals(currentUser.getDepartmentId())) {
+            throw new BusinessException("只能在本人所属部门下创建文件夹");
+        }
+        return targetDepartmentId;
+    }
+
+    private boolean isSameOrDescendantDepartment(Long candidateDepartmentId, Long ancestorDepartmentId) {
+        if (candidateDepartmentId == null || ancestorDepartmentId == null) {
+            return false;
+        }
+        Long nextId = candidateDepartmentId;
+        Set<Long> visited = new HashSet<Long>();
+        while (nextId != null && visited.add(nextId)) {
+            if (nextId.equals(ancestorDepartmentId)) {
+                return true;
+            }
+            DepartmentEntity department = departmentMapper.selectById(nextId);
+            if (department == null) {
+                return false;
+            }
+            nextId = department.getParentId();
+        }
+        return false;
     }
 }

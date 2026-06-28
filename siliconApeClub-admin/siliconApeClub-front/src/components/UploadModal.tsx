@@ -1,10 +1,10 @@
 /**
- * 上传文档弹窗，自动继承当前用户部门并展示当前目录。
+ * 上传文档弹窗，自动继承当前目录所属部门并展示当前目录。
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Building2, Folder as FolderIcon, Loader2, Trash2, Upload, X } from 'lucide-react';
-import { Folder } from '../types';
+import { Department, Folder } from '../types';
 import { documentRepository } from '../services';
 import { useToast } from '../contexts/ToastContext';
 import { useUser } from '../contexts/UserContext';
@@ -33,14 +33,37 @@ export function UploadModal({ parentFolder, onClose, onUploaded }: UploadModalPr
   const { currentUser } = useUser();
   const { pushToast } = useToast();
   const [files, setFiles] = useState<PendingFile[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    documentRepository.getDepartments()
+      .then((nextDepartments) => {
+        if (!cancelled) {
+          setDepartments(nextDepartments);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDepartments([]);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   if (!currentUser) {
     return null;
   }
 
-  const currentDepartmentName = currentUser.departmentName ?? currentUser.departmentId;
-  const parentFolderName = parentFolder?.name ?? '知识资产根目录';
+  const currentDepartmentName = parentFolder?.departmentId
+    ? departments.find((department) => department.id === parentFolder.departmentId)?.name ?? '正在读取所属部门...'
+    : currentUser.departmentName ?? currentUser.departmentId;
+  const parentFolderName = parentFolder?.name ?? '文档管理根目录';
 
   const addFiles = (incomingFiles: File[]) => {
     const { accepted, rejectedMessages } = validateUploadFiles(incomingFiles);
@@ -83,7 +106,7 @@ export function UploadModal({ parentFolder, onClose, onUploaded }: UploadModalPr
       pushToast({
         tone: 'success',
         title: '上传完成',
-        description: '知识资产已创建，并已使用默认解析引擎完成解析。',
+        description: '文档已创建，并已使用默认解析引擎完成解析。',
       });
       onUploaded();
       onClose();
@@ -112,7 +135,7 @@ export function UploadModal({ parentFolder, onClose, onUploaded }: UploadModalPr
             </div>
             <div>
               <h2 className="text-xl font-bold text-slate-900">上传文档</h2>
-              <p className="text-sm text-slate-500">上传后将自动触发默认解析引擎，知识库同步需手动执行。</p>
+              <p className="text-sm text-slate-500">上传后将自动归属当前目录所属部门，知识库同步需手动执行。</p>
             </div>
           </div>
           <button onClick={onClose} className="rounded-xl p-2 text-slate-400 transition hover:bg-slate-200">
@@ -142,7 +165,7 @@ export function UploadModal({ parentFolder, onClose, onUploaded }: UploadModalPr
               <Upload size={30} className="text-blue-700" />
             </div>
             <p className="font-bold text-slate-900">点击或拖拽文件到此处上传</p>
-            <p className="mt-1 text-sm text-slate-400">支持 PDF、DOCX、PPTX、Excel、Markdown、图片与视频，暂不支持 DOC、PPT</p>
+            <p className="mt-1 text-sm text-slate-400">支持 PDF、DOCX、PPTX、Excel、Markdown、文本、SQL、日志、HTML、图片与视频，暂不支持 DOC、PPT</p>
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">

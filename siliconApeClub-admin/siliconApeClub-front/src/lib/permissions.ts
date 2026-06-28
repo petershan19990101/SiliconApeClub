@@ -81,7 +81,7 @@ export function canPerformDocumentAction(
   }
 
   if (document.status === 'locked') {
-    return user.role === 'admin' && action === 'lock';
+    return user.role === 'admin' && (action === 'lock' || action === 'delete');
   }
 
   if (document.status === 'parsing') {
@@ -107,7 +107,13 @@ export function canPerformDocumentAction(
     case 'edit':
       return document.status === 'uploaded' || document.status === 'rag_ready' || document.status === 'rejected';
     case 'delete':
-      return document.status !== 'pending_audit' && document.status !== 'published';
+      if (document.status === 'pending_audit') {
+        return false;
+      }
+      if (document.status === 'published') {
+        return user.role === 'admin';
+      }
+      return true;
     case 'lock':
       return user.role === 'admin' && document.status !== 'pending_audit';
     default:

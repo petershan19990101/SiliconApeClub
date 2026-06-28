@@ -13,7 +13,7 @@ export const ACTION_LABELS: Record<PermissionAction, string> = {
   share: '分享',
   manage: '管理',
   correct: '校正',
-  push_rag: '推送 RAG',
+  push_rag: '生成 Wiki/RAG',
   request_audit: '提交审核',
   publish: '审核发布',
   reject: '驳回',
@@ -32,7 +32,8 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   lock: '锁定版本',
   unlock: '解除锁定',
   reparse: '重新解析',
-  rag_sync: '同步 RAG',
+  rag_sync: '直推 RAG',
+  pipeline_to_wiki: '生成 LLM Wiki',
   create_revision: '创建修订草稿',
 };
 
@@ -70,9 +71,9 @@ export const STATUS_META: Record<
   }
 > = {
   uploaded: {
-    label: '待推送 RAG',
+    label: '待生成 Wiki',
     tone: 'slate',
-    description: '文档已完成解析，等待手动推送到知识库。',
+    description: '文档已完成解析，等待生成 LLM Wiki 并同步 RAG。',
   },
   parsing: {
     label: '解析中',
@@ -80,9 +81,9 @@ export const STATUS_META: Record<
     description: '系统正在执行解析任务。',
   },
   rag_ready: {
-    label: 'RAG 已就绪',
+    label: '知识已就绪',
     tone: 'emerald',
-    description: '解析与知识库同步已完成，可以提交审核。',
+    description: 'LLM Wiki 与 RAG 索引已完成，可以提交审核。',
   },
   pending_audit: {
     label: '待审核',

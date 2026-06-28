@@ -27,7 +27,7 @@ export function getViewerKindLabel(kind: DocumentViewerKind) {
     case 'pdf':
       return 'PDF 预览';
     case 'markdown':
-      return 'Markdown 预览';
+      return 'Markdown / 文本预览';
     case 'docx':
       return 'DOCX 预览';
     case 'pptx':
@@ -48,7 +48,7 @@ export function getViewerHint(kind: DocumentViewerKind) {
     case 'pdf':
       return '当前通过 PDF 预览链展示文档，适合稳定阅读复杂版式内容。';
     case 'markdown':
-      return '当前已接入 react-markdown，可渲染 Markdown 原文。';
+      return '当前复用 Markdown 渲染链展示 Markdown、文本、SQL、日志与 HTML 源文件。';
     case 'docx':
       return '当前基于 docx-preview 做版式预览，适合阅读与查阅普通 DOCX 文档。';
     case 'pptx':

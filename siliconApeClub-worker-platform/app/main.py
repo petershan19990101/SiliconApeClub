@@ -20,6 +20,7 @@ from .models import (
     MessageCreate,
     ReviewRequest,
     SessionCreate,
+    SkillProposalCreate,
     TaskCreate,
     WikiCandidateCreate,
 )
@@ -554,6 +555,79 @@ def list_skills(
             return employee_skills(employeeId, principal)
         rows = fetch_all(conn, "SELECT * FROM wp_worker_skill ORDER BY skill_type, name")
         return [normalize_json(row, ["input_schema", "output_schema", "guardrails"]) for row in rows]
+
+
+@app.post("/api/worker-platform/skills/proposals")
+def create_skill_proposal(
+    request: SkillProposalCreate,
+    principal: Dict[str, Any] = Depends(require_principal),
+) -> Dict[str, Any]:
+    if not can_view_org(principal):
+        raise HTTPException(status_code=403, detail="External customers cannot propose employee skills")
+    if request.skillLevel == "advanced" and principal["principal_type"] != "admin":
+        raise HTTPException(status_code=403, detail="Advanced skills can only be proposed by top management")
+    with get_connection() as conn:
+        if not table_exists(conn, "hr_skill_repository"):
+            raise HTTPException(status_code=503, detail="Skill repository is not initialized")
+        if request.taskId:
+            task = get_visible_task(conn, principal, request.taskId)
+        else:
+            task = None
+        if request.demandGroupId:
+            ensure_group_visible(conn, principal, request.demandGroupId)
+        source_employee_id = request.sourceEmployeeId or (task.get("assigned_employee_id") if task else None)
+        if source_employee_id:
+            employee_detail(source_employee_id, principal)
+        admin_employee_id_value = admin_source_numeric_id(source_employee_id, "employee-admin-")
+        department_id = request.departmentId
+        if department_id is None and source_employee_id:
+            employee = fetch_one(conn, "SELECT org_unit_id FROM wp_ai_employee WHERE id = %s", (source_employee_id,))
+            department_id = admin_source_numeric_id(employee.get("org_unit_id") if employee else None, "org-admin-")
+        execute(
+            conn,
+            """
+            INSERT INTO hr_skill_repository(code, name, description, department_id, skill_type, skill_level, invocation_mode,
+                input_schema_json, output_schema_json, orchestration_config_json, guardrails_json,
+                source_type, source_employee_id, review_status, enabled, created_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'ai_employee', %s, 'pending_review', 0, %s)
+            ON CONFLICT (code) DO UPDATE SET
+                name = EXCLUDED.name,
+                description = EXCLUDED.description,
+                department_id = EXCLUDED.department_id,
+                skill_type = EXCLUDED.skill_type,
+                skill_level = EXCLUDED.skill_level,
+                invocation_mode = EXCLUDED.invocation_mode,
+                input_schema_json = EXCLUDED.input_schema_json,
+                output_schema_json = EXCLUDED.output_schema_json,
+                orchestration_config_json = EXCLUDED.orchestration_config_json,
+                guardrails_json = EXCLUDED.guardrails_json,
+                source_type = EXCLUDED.source_type,
+                source_employee_id = EXCLUDED.source_employee_id,
+                review_status = 'pending_review',
+                enabled = 0,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                request.code,
+                request.name,
+                request.description,
+                department_id,
+                request.skillType,
+                request.skillLevel,
+                request.invocationMode,
+                request.inputSchemaJson,
+                request.outputSchemaJson,
+                request.orchestrationConfigJson,
+                request.guardrailsJson,
+                admin_employee_id_value,
+                principal["principal_code"],
+            ),
+        )
+        if request.taskId:
+            insert_event(conn, request.taskId, "skill_proposal_created", principal["id"], source_employee_id, {"skillCode": request.code})
+        conn.commit()
+        row = fetch_one(conn, "SELECT * FROM hr_skill_repository WHERE code = %s", (request.code,))
+        return normalize(row)
 
 
 @app.post("/api/worker-platform/wiki-candidates")
@@ -1165,8 +1239,92 @@ def sync_management_projection(conn: Any) -> None:
             if source_id and target_id:
                 upsert_org_relation(conn, source_id, target_id, row["relation_type"], row.get("description"))
 
+    sync_management_skills(conn, employee_by_admin_id)
     grant_internal_employee_permissions(conn, list(employee_by_code.values()))
     sync_customer_employee_permissions(conn, employee_by_code)
+
+
+def sync_management_skills(conn: Any, employee_by_admin_id: Dict[Any, str]) -> None:
+    if not table_exists(conn, "hr_skill_repository") or not table_exists(conn, "hr_skill_binding"):
+        return
+    skill_rows = fetch_all(
+        conn,
+        """
+        SELECT id, code, name, description, skill_type, input_schema_json, output_schema_json,
+               orchestration_config_json, guardrails_json, enabled
+        FROM hr_skill_repository
+        WHERE review_status = 'approved' AND COALESCE(enabled, 1) = 1
+        ORDER BY id
+        """,
+    )
+    for row in skill_rows:
+        guardrails = parse_json(row.get("guardrails_json")) or {}
+        guardrails["orchestration"] = parse_json(row.get("orchestration_config_json")) or {}
+        execute(
+            conn,
+            """
+            INSERT INTO wp_worker_skill(id, code, name, skill_type, description, input_schema, output_schema, guardrails, enabled)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 1)
+            ON CONFLICT (code) DO UPDATE SET
+                name = EXCLUDED.name,
+                skill_type = EXCLUDED.skill_type,
+                description = EXCLUDED.description,
+                input_schema = EXCLUDED.input_schema,
+                output_schema = EXCLUDED.output_schema,
+                guardrails = EXCLUDED.guardrails,
+                enabled = EXCLUDED.enabled
+            """,
+            (
+                admin_skill_id(row["id"]),
+                row["code"],
+                row["name"],
+                row.get("skill_type") or "tool",
+                row.get("description"),
+                row.get("input_schema_json") or "{}",
+                row.get("output_schema_json") or "{}",
+                json_dumps(guardrails),
+            ),
+        )
+
+    if skill_rows:
+        placeholders = ", ".join(["%s"] * len(skill_rows))
+        execute(
+            conn,
+            f"UPDATE wp_worker_skill SET enabled = 0 WHERE id LIKE 'skill-admin-%%' AND code NOT IN ({placeholders})",
+            tuple(row["code"] for row in skill_rows),
+        )
+
+    execute(conn, "DELETE FROM wp_skill_binding WHERE skill_id LIKE 'skill-admin-%%'")
+    binding_rows = fetch_all(
+        conn,
+        """
+        SELECT b.ai_employee_id, b.skill_id, b.binding_scope, b.required, b.sort_order
+        FROM hr_skill_binding b
+        JOIN hr_skill_repository s ON s.id = b.skill_id
+        WHERE b.enabled = 1 AND s.review_status = 'approved' AND s.enabled = 1
+        ORDER BY b.ai_employee_id, b.sort_order, s.name
+        """,
+    )
+    for row in binding_rows:
+        employee_id = employee_by_admin_id.get(row["ai_employee_id"])
+        if not employee_id:
+            continue
+        execute(
+            conn,
+            """
+            INSERT INTO wp_skill_binding(id, employee_id, skill_id, binding_scope, enabled)
+            VALUES (%s, %s, %s, %s, 1)
+            ON CONFLICT (employee_id, skill_id) DO UPDATE SET
+                binding_scope = EXCLUDED.binding_scope,
+                enabled = EXCLUDED.enabled
+            """,
+            (
+                new_id("bind"),
+                employee_id,
+                admin_skill_id(row["skill_id"]),
+                json_dumps({"source": "management_console", "required": bool(row.get("required")), "sortOrder": row.get("sort_order")}),
+            ),
+        )
 
 
 def grant_internal_employee_permissions(conn: Any, employee_ids: List[str]) -> None:
@@ -1265,6 +1423,17 @@ def admin_org_id(source_id: Any) -> str:
 
 def admin_employee_id(source_id: Any) -> str:
     return f"employee-admin-{source_id}"
+
+
+def admin_skill_id(source_id: Any) -> str:
+    return f"skill-admin-{source_id}"
+
+
+def admin_source_numeric_id(value: Optional[str], prefix: str) -> Optional[int]:
+    if not value or not value.startswith(prefix):
+        return None
+    suffix = value[len(prefix):]
+    return int(suffix) if suffix.isdigit() else None
 
 
 def create_assistant_response(

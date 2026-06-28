@@ -88,7 +88,7 @@ export function ReparseModal({ document, onClose, onConfirm }: ReparseModalProps
       pushToast({
         tone: 'success',
         title: '重新解析完成',
-        description: '文档已生成新版本，等待手动推送知识库。',
+        description: '文档已生成新版本，等待生成 LLM Wiki 并同步 RAG。',
       });
       onConfirm(updated);
       onClose();

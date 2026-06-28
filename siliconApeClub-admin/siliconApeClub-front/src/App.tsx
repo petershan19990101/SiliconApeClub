@@ -15,6 +15,7 @@ import { AiEmployees } from './components/knowledge/AiEmployees';
 import { KnowledgeHealth } from './components/knowledge/KnowledgeHealth';
 import { PositionPackages } from './components/knowledge/PositionPackages';
 import { RagDebug } from './components/knowledge/RagDebug';
+import { SkillRepository } from './components/knowledge/SkillRepository';
 import { WikiPages } from './components/knowledge/WikiPages';
 import { AppShellProvider, useAppShell } from './contexts/AppShellContext';
 import { ToastProvider } from './contexts/ToastContext';
@@ -45,6 +46,8 @@ function AppContent() {
         return <RagDebug />;
       case 'ai_employees':
         return <AiEmployees />;
+      case 'skill_repository':
+        return <SkillRepository />;
       case 'customer_members':
         return <AiEmployees defaultSection="customers" />;
       case 'settings':

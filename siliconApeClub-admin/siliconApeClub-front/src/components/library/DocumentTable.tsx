@@ -22,7 +22,7 @@ interface DocumentTableProps {
   onPreviewDocument: (document: Document) => void;
   onOpenPermissions: (document: Document) => void;
   onOpenFolderPermissions: (folder: Folder) => void;
-  onPushRag: (document: Document) => void;
+  onOpenKnowledgePipeline: (document: Document) => void;
   onRequestAudit: (document: Document) => void;
   onPublish: (document: Document) => void;
   onReject: (document: Document) => void;
@@ -48,7 +48,7 @@ export function DocumentTable({
   onPreviewDocument,
   onOpenPermissions,
   onOpenFolderPermissions,
-  onPushRag,
+  onOpenKnowledgePipeline,
   onRequestAudit,
   onPublish,
   onReject,
@@ -215,7 +215,7 @@ export function DocumentTable({
                   busyAction={busyAction}
                   onOpenDocument={onOpenDocument}
                   onOpenPermissions={onOpenPermissions}
-                  onPushRag={onPushRag}
+                  onOpenKnowledgePipeline={onOpenKnowledgePipeline}
                   onRequestAudit={onRequestAudit}
                   onPublish={onPublish}
                   onReject={onReject}

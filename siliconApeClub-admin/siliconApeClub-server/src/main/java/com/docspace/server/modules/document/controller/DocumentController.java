@@ -13,6 +13,8 @@ import com.docspace.server.modules.document.dto.StartParseRequest;
 import com.docspace.server.modules.document.service.DocumentCommandService;
 import com.docspace.server.modules.document.service.DocumentQueryService;
 import com.docspace.server.modules.document.service.ParseEngineService;
+import com.docspace.server.modules.pipeline.dto.DocumentToWikiRequest;
+import com.docspace.server.modules.pipeline.service.KnowledgePipelineService;
 import com.docspace.server.security.SecurityUser;
 import java.util.List;
 import javax.validation.Valid;
@@ -38,6 +40,7 @@ public class DocumentController {
     private final DocumentQueryService documentQueryService;
     private final DocumentCommandService documentCommandService;
     private final ParseEngineService parseEngineService;
+    private final KnowledgePipelineService knowledgePipelineService;
 
     @GetMapping("/documents")
     public ApiResponse<PageResponse<DocumentDto>> listDocuments(@RequestParam(required = false) Long departmentId,
@@ -89,6 +92,14 @@ public class DocumentController {
     public ApiResponse<DocumentDto> startRagSync(@PathVariable Long id,
                                                  @AuthenticationPrincipal SecurityUser currentUser) {
         return ApiResponse.success(documentCommandService.startRagSync(id, currentUser));
+    }
+
+    @PostMapping({"/documents/{id}/to-wiki", "/documents/{id}/generate-wiki"})
+    public ApiResponse<DocumentDto> documentToWiki(@PathVariable Long id,
+                                                   @RequestBody(required = false) DocumentToWikiRequest request,
+                                                   @AuthenticationPrincipal SecurityUser currentUser) {
+        knowledgePipelineService.documentToWiki(id, request, currentUser);
+        return ApiResponse.success(documentQueryService.getDocument(id));
     }
 
     @PostMapping("/documents/{id}/request-audit")

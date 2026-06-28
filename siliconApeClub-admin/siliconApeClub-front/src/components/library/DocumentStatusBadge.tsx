@@ -35,30 +35,30 @@ export function getDocumentDisplayStatus(document: Document) {
 
   if (document.ragJob.status === 'running') {
     return {
-      label: 'RAG 同步中',
+      label: '知识流水线中',
       tone: 'blue' as const,
       pulse: true,
-      detail: '正在将最新文本同步到知识库。',
+      detail: '正在生成 LLM Wiki 并同步 RAG 索引。',
     };
   }
 
   if (document.ragJob.status === 'failed') {
     return {
-      label: 'RAG 同步失败',
+      label: '知识流水线失败',
       tone: 'rose' as const,
       pulse: false,
-      detail: document.ragJob.errorMessage ?? '请重试同步到知识库。',
+      detail: document.ragJob.errorMessage ?? '请重试生成 Wiki 并同步 RAG。',
     };
   }
 
   if (document.status === 'uploaded' && document.parseJob.status === 'success' && document.ragJob.status === 'idle') {
     return {
-      label: '待推送 RAG',
+      label: '待生成 Wiki',
       tone: 'slate' as const,
       pulse: false,
       detail: document.parseJob.engine
-        ? `已使用 ${document.parseJob.engine} 完成解析，等待推送知识库。`
-        : '解析已完成，等待推送知识库。',
+        ? `已使用 ${document.parseJob.engine} 完成解析，等待生成 LLM Wiki。`
+        : '解析已完成，等待生成 LLM Wiki。',
     };
   }
 

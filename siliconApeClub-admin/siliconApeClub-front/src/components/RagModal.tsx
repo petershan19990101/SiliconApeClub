@@ -1,5 +1,5 @@
 /**
- * RAG 管理弹窗，负责查看同步历史并触发知识库重同步。
+ * 知识生命周期弹窗，负责查看流水线历史并触发文档生成 LLM Wiki 与 RAG 索引。
  */
 import React, { useEffect, useState } from 'react';
 import { Database, RefreshCw, X } from 'lucide-react';
@@ -23,7 +23,7 @@ export function RagModal({ document, onClose, onUpdate }: RagModalProps) {
   const { pushToast } = useToast();
   const [versions, setVersions] = useState<DocumentVersion[]>(document.versionHistory);
   const [audits, setAudits] = useState<AuditRecord[]>(document.auditTrail);
-  const [isSyncing, setIsSyncing] = useState(false);
+  const [isRunning, setIsRunning] = useState(false);
 
   useEffect(() => {
     async function fetchHistory() {
@@ -35,28 +35,28 @@ export function RagModal({ document, onClose, onUpdate }: RagModalProps) {
     void fetchHistory();
   }, [document.id, document.updatedAt]);
 
-  const handleSync = async () => {
-    setIsSyncing(true);
+  const handlePipeline = async () => {
+    setIsRunning(true);
 
     try {
-      const updated = await documentRepository.startRagSync(document.id, { operator: currentUser });
+      const updated = await documentRepository.generateWiki(document.id, { operator: currentUser, publish: true });
       const history = await documentRepository.listHistory(document.id);
       setVersions(history.versions);
       setAudits(history.audits);
       onUpdate(updated);
       pushToast({
         tone: 'success',
-        title: 'RAG 同步完成',
-        description: '最新文本已经同步到知识库，可继续提交审核。',
+        title: 'Wiki 已生成并入 RAG',
+        description: '解析产物已转为 LLM Wiki，发布后完成索引，可继续提交审核。',
       });
     } catch (caughtError) {
       pushToast({
         tone: 'error',
-        title: '同步失败',
-        description: getErrorMessage(caughtError, 'RAG 同步失败'),
+        title: '知识流水线失败',
+        description: getErrorMessage(caughtError, '生成 LLM Wiki 或同步 RAG 失败'),
       });
     } finally {
-      setIsSyncing(false);
+      setIsRunning(false);
     }
   };
 
@@ -73,7 +73,7 @@ export function RagModal({ document, onClose, onUpdate }: RagModalProps) {
               <Database size={24} />
             </div>
             <div>
-              <h2 className="text-xl font-bold text-slate-900">RAG 同步管理</h2>
+              <h2 className="text-xl font-bold text-slate-900">知识生命周期</h2>
               <p className="text-sm text-slate-500">{document.name}</p>
             </div>
           </div>
@@ -85,23 +85,23 @@ export function RagModal({ document, onClose, onUpdate }: RagModalProps) {
         <div className="grid gap-0 lg:grid-cols-[1.2fr_1fr]">
           <div className="border-r border-slate-100 p-8">
             <div className="rounded-3xl border border-emerald-100 bg-emerald-50/70 p-6">
-              <p className="text-xs font-black uppercase tracking-wider text-emerald-700">同步状态</p>
+              <p className="text-xs font-black uppercase tracking-wider text-emerald-700">生命周期状态</p>
               <h3 className="mt-3 text-2xl font-bold text-slate-900">
-                {document.ragJob.status === 'success' ? '知识库已同步最新版本' : '知识库需要重新同步'}
+                {document.ragJob.status === 'success' ? 'LLM Wiki 与 RAG 索引已就绪' : '等待生成 LLM Wiki'}
               </h3>
               <p className="mt-2 text-sm leading-relaxed text-slate-600">
-                最近一次同步时间：{formatDateTime(document.ragJob.finishedAt ?? document.ragJob.updatedAt)}
+                最近一次流水线时间：{formatDateTime(document.ragJob.finishedAt ?? document.ragJob.updatedAt)}
               </p>
               {document.ragJob.errorMessage ? (
                 <p className="mt-3 rounded-2xl bg-white px-4 py-3 text-sm text-rose-700">{document.ragJob.errorMessage}</p>
               ) : null}
               <button
-                onClick={handleSync}
-                disabled={isSyncing}
+                onClick={handlePipeline}
+                disabled={isRunning}
                 className="mt-5 inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-emerald-600/20 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {isSyncing ? <RefreshCw size={16} className="animate-spin" /> : null}
-                {isSyncing ? '同步中...' : '重新同步 RAG'}
+                {isRunning ? <RefreshCw size={16} className="animate-spin" /> : null}
+                {isRunning ? '生成中...' : document.ragJob.status === 'success' ? '重建 Wiki 入 RAG' : '生成 Wiki 入 RAG'}
               </button>
             </div>
 
@@ -127,7 +127,7 @@ export function RagModal({ document, onClose, onUpdate }: RagModalProps) {
           </div>
 
           <div className="custom-scrollbar max-h-[72vh] overflow-y-auto p-8">
-            <h3 className="mb-4 text-sm font-bold text-slate-900">同步与审核留痕</h3>
+            <h3 className="mb-4 text-sm font-bold text-slate-900">流水线与审核留痕</h3>
             <div className="space-y-3">
               {audits.map((audit) => (
                 <div key={audit.id} className="rounded-2xl border border-slate-100 bg-white px-4 py-3 shadow-sm">

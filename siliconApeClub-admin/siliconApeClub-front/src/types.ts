@@ -44,6 +44,7 @@ export type AuditAction =
   | 'unlock'
   | 'reparse'
   | 'rag_sync'
+  | 'pipeline_to_wiki'
   | 'create_revision';
 
 export interface User {
@@ -280,6 +281,7 @@ export type ActivityType =
   | 'upload'
   | 'parse'
   | 'rag'
+  | 'pipeline_to_wiki'
   | 'audit'
   | 'publish'
   | 'reject'
@@ -358,6 +360,7 @@ export type View =
   | 'knowledge_health'
   | 'rag_debug'
   | 'ai_employees'
+  | 'skill_repository'
   | 'customer_members'
   | 'settings'
   | 'help';
@@ -467,8 +470,16 @@ export interface AiEmployee {
   performanceStatus?: string;
   enabled: boolean;
   status: string;
+  offlineReason?: string;
+  leftAt?: string;
+  skillCount?: number;
+  totalTokens?: number;
+  memoryItems?: number;
   packages?: PositionPackage[];
   contacts?: EmployeeContactRelation[];
+  skills?: EmployeeSkillBinding[];
+  assessmentRules?: EmployeeAssessmentRule[];
+  performance?: EmployeePerformance;
 }
 
 export interface EmployeeContactRelation {
@@ -479,6 +490,83 @@ export interface EmployeeContactRelation {
   relatedRoleTitle?: string;
   relationType: string;
   description?: string;
+}
+
+export interface EmployeeSkillBinding {
+  id: string;
+  aiEmployeeId?: string;
+  skillId: string;
+  code?: string;
+  name: string;
+  description?: string;
+  departmentId?: string;
+  departmentName?: string;
+  skillType: string;
+  skillLevel: string;
+  invocationMode?: string;
+  reviewStatus?: string;
+  required?: boolean;
+  sortOrder?: number;
+  enabled?: boolean;
+}
+
+export interface EmployeeAssessmentRule {
+  id?: string;
+  aiEmployeeId?: string;
+  metricKey: string;
+  metricLabel: string;
+  metricType: string;
+  targetValue: number;
+  actualValue?: number;
+  weight: number;
+  unit: string;
+  enabled: boolean;
+}
+
+export interface EmployeeUsageSummary {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  memoryBytes: number;
+  memoryItems: number;
+  costAmount: number;
+}
+
+export interface EmployeePerformance {
+  usage: EmployeeUsageSummary;
+  rules: EmployeeAssessmentRule[];
+  taskMemoryCount: number;
+  wikiProposalCount: number;
+  workerTaskCount: number;
+  approvedSkillCount: number;
+}
+
+export interface SkillRepositoryItem {
+  id: string;
+  code: string;
+  name: string;
+  description?: string;
+  departmentId?: string;
+  departmentName?: string;
+  skillType: string;
+  skillLevel: string;
+  invocationMode: string;
+  inputSchemaJson?: string;
+  outputSchemaJson?: string;
+  orchestrationConfigJson?: string;
+  guardrailsJson?: string;
+  sourceType: string;
+  sourceEmployeeId?: string;
+  sourceEmployeeName?: string;
+  reviewStatus: string;
+  enabled: boolean;
+  bindingCount?: number;
+  createdBy?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  bindings?: Array<Record<string, unknown>>;
 }
 
 export interface HrRole {
@@ -533,6 +621,7 @@ export interface OrgHumanCenterOverview {
   roles: HrRole[];
   modelProfiles: ModelProfile[];
   employees: AiEmployee[];
+  skills: SkillRepositoryItem[];
   customers: CustomerMember[];
   customerRoles: HrRole[];
   customerDepartmentVisibility: CustomerVisibility[];

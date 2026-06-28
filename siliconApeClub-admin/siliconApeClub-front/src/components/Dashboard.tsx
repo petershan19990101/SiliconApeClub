@@ -80,7 +80,7 @@ export function Dashboard() {
           onClick={() => setCurrentView('library')}
           className="rounded-xl bg-blue-700 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-blue-700/20 transition hover:brightness-110"
         >
-          进入知识资产
+          进入文档管理
         </button>
       </div>
 

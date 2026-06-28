@@ -22,7 +22,7 @@ interface DocumentActionsProps {
   busyAction?: string | null;
   onOpenDocument: (document: Document) => void;
   onOpenPermissions: (document: Document) => void;
-  onPushRag: (document: Document) => void;
+  onOpenKnowledgePipeline: (document: Document) => void;
   onRequestAudit: (document: Document) => void;
   onPublish: (document: Document) => void;
   onReject: (document: Document) => void;
@@ -38,7 +38,7 @@ export function DocumentActions({
   busyAction,
   onOpenDocument,
   onOpenPermissions,
-  onPushRag,
+  onOpenKnowledgePipeline,
   onRequestAudit,
   onPublish,
   onReject,
@@ -47,7 +47,7 @@ export function DocumentActions({
   onDelete,
 }: DocumentActionsProps) {
   const canCorrect = canPerformDocumentAction(document, currentUser, folders, 'correct');
-  const canPushRag =
+  const canRunKnowledgePipeline =
     canPerformDocumentAction(document, currentUser, folders, 'push_rag') &&
     hasSystemPermission(currentUser, 'document.push_rag');
   const canRequestAudit =
@@ -85,13 +85,13 @@ export function DocumentActions({
         tone="primary"
       />
 
-      {canPushRag ? (
+      {canRunKnowledgePipeline ? (
         <ActionButton
-          label={document.ragJob.status === 'failed' ? '重试推送' : '推送 RAG'}
+          label={document.ragJob.status === 'failed' ? '重试生成' : document.ragJob.status === 'success' ? '重建 Wiki' : '生成 Wiki'}
           icon={Send}
           tone="success"
-          busy={busyAction === `rag:${document.id}`}
-          onClick={() => onPushRag(document)}
+          busy={busyAction === `pipeline:${document.id}`}
+          onClick={() => onOpenKnowledgePipeline(document)}
         />
       ) : null}
 

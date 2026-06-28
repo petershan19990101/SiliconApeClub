@@ -3,7 +3,10 @@ import {
   AiEmployee,
   CustomerMember,
   CustomerVisibility,
+  EmployeeAssessmentRule,
   EmployeeContactRelation,
+  EmployeePerformance,
+  EmployeeSkillBinding,
   HealthIssue,
   HealthReport,
   HrRole,
@@ -14,6 +17,7 @@ import {
   PositionPackage,
   RagAclBinding,
   RagAclPolicy,
+  SkillRepositoryItem,
   WikiPage,
   WikiRelation,
   WikiStructureGroup,
@@ -101,8 +105,16 @@ function normalizeAiEmployee(item: Record<string, unknown>): AiEmployee {
     performanceStatus: item.performanceStatus == null ? undefined : String(item.performanceStatus),
     enabled: item.enabled === true || item.enabled === 1,
     status: String(item.status ?? ''),
+    offlineReason: item.offlineReason == null ? undefined : String(item.offlineReason),
+    leftAt: item.leftAt == null ? undefined : String(item.leftAt),
+    skillCount: item.skillCount == null ? undefined : Number(item.skillCount),
+    totalTokens: item.totalTokens == null ? undefined : Number(item.totalTokens),
+    memoryItems: item.memoryItems == null ? undefined : Number(item.memoryItems),
     packages: Array.isArray(item.packages) ? item.packages.map((pkg) => normalizePositionPackage(pkg as Record<string, unknown>)) : undefined,
     contacts: Array.isArray(item.contacts) ? item.contacts.map((contact) => normalizeEmployeeContact(contact as Record<string, unknown>)) : undefined,
+    skills: Array.isArray(item.skills) ? item.skills.map((skill) => normalizeEmployeeSkillBinding(skill as Record<string, unknown>)) : undefined,
+    assessmentRules: Array.isArray(item.assessmentRules) ? item.assessmentRules.map((rule) => normalizeEmployeeAssessmentRule(rule as Record<string, unknown>)) : undefined,
+    performance: item.performance && typeof item.performance === 'object' ? normalizeEmployeePerformance(item.performance as Record<string, unknown>) : undefined,
   };
 }
 
@@ -115,6 +127,90 @@ function normalizeEmployeeContact(item: Record<string, unknown>): EmployeeContac
     relatedRoleTitle: item.relatedRoleTitle == null ? undefined : String(item.relatedRoleTitle),
     relationType: String(item.relationType ?? ''),
     description: item.description == null ? undefined : String(item.description),
+  };
+}
+
+function normalizeEmployeeSkillBinding(item: Record<string, unknown>): EmployeeSkillBinding {
+  return {
+    id: String(item.id),
+    aiEmployeeId: item.aiEmployeeId == null ? undefined : String(item.aiEmployeeId),
+    skillId: String(item.skillId ?? item.id ?? ''),
+    code: item.code == null ? undefined : String(item.code),
+    name: String(item.name ?? ''),
+    description: item.description == null ? undefined : String(item.description),
+    departmentId: item.departmentId == null ? undefined : String(item.departmentId),
+    departmentName: item.departmentName == null ? undefined : String(item.departmentName),
+    skillType: String(item.skillType ?? 'tool'),
+    skillLevel: String(item.skillLevel ?? 'basic'),
+    invocationMode: item.invocationMode == null ? undefined : String(item.invocationMode),
+    reviewStatus: item.reviewStatus == null ? undefined : String(item.reviewStatus),
+    required: item.required == null ? undefined : item.required === true || item.required === 1,
+    sortOrder: item.sortOrder == null ? undefined : Number(item.sortOrder),
+    enabled: item.enabled == null ? undefined : item.enabled === true || item.enabled === 1,
+  };
+}
+
+function normalizeEmployeeAssessmentRule(item: Record<string, unknown>): EmployeeAssessmentRule {
+  return {
+    id: item.id == null ? undefined : String(item.id),
+    aiEmployeeId: item.aiEmployeeId == null ? undefined : String(item.aiEmployeeId),
+    metricKey: String(item.metricKey ?? ''),
+    metricLabel: String(item.metricLabel ?? ''),
+    metricType: String(item.metricType ?? 'count'),
+    targetValue: Number(item.targetValue ?? 0),
+    actualValue: item.actualValue == null ? undefined : Number(item.actualValue),
+    weight: Number(item.weight ?? 1),
+    unit: String(item.unit ?? 'count'),
+    enabled: item.enabled == null ? true : item.enabled === true || item.enabled === 1,
+  };
+}
+
+function normalizeEmployeePerformance(item: Record<string, unknown>): EmployeePerformance {
+  const usage = item.usage && typeof item.usage === 'object' ? item.usage as Record<string, unknown> : {};
+  return {
+    usage: {
+      inputTokens: Number(usage.inputTokens ?? 0),
+      outputTokens: Number(usage.outputTokens ?? 0),
+      totalTokens: Number(usage.totalTokens ?? 0),
+      memoryBytes: Number(usage.memoryBytes ?? 0),
+      memoryItems: Number(usage.memoryItems ?? 0),
+      costAmount: Number(usage.costAmount ?? 0),
+    },
+    rules: Array.isArray(item.rules) ? item.rules.map((rule) => normalizeEmployeeAssessmentRule(rule as Record<string, unknown>)) : [],
+    taskMemoryCount: Number(item.taskMemoryCount ?? 0),
+    wikiProposalCount: Number(item.wikiProposalCount ?? 0),
+    workerTaskCount: Number(item.workerTaskCount ?? 0),
+    approvedSkillCount: Number(item.approvedSkillCount ?? 0),
+  };
+}
+
+function normalizeSkillRepositoryItem(item: Record<string, unknown>): SkillRepositoryItem {
+  return {
+    id: String(item.id),
+    code: String(item.code ?? ''),
+    name: String(item.name ?? ''),
+    description: item.description == null ? undefined : String(item.description),
+    departmentId: item.departmentId == null ? undefined : String(item.departmentId),
+    departmentName: item.departmentName == null ? undefined : String(item.departmentName),
+    skillType: String(item.skillType ?? 'tool'),
+    skillLevel: String(item.skillLevel ?? 'basic'),
+    invocationMode: String(item.invocationMode ?? 'tool_call'),
+    inputSchemaJson: item.inputSchemaJson == null ? undefined : String(item.inputSchemaJson),
+    outputSchemaJson: item.outputSchemaJson == null ? undefined : String(item.outputSchemaJson),
+    orchestrationConfigJson: item.orchestrationConfigJson == null ? undefined : String(item.orchestrationConfigJson),
+    guardrailsJson: item.guardrailsJson == null ? undefined : String(item.guardrailsJson),
+    sourceType: String(item.sourceType ?? 'human'),
+    sourceEmployeeId: item.sourceEmployeeId == null ? undefined : String(item.sourceEmployeeId),
+    sourceEmployeeName: item.sourceEmployeeName == null ? undefined : String(item.sourceEmployeeName),
+    reviewStatus: String(item.reviewStatus ?? 'draft'),
+    enabled: item.enabled == null ? true : item.enabled === true || item.enabled === 1,
+    bindingCount: item.bindingCount == null ? undefined : Number(item.bindingCount),
+    createdBy: item.createdBy == null ? undefined : String(item.createdBy),
+    reviewedBy: item.reviewedBy == null ? undefined : String(item.reviewedBy),
+    reviewedAt: item.reviewedAt == null ? undefined : String(item.reviewedAt),
+    createdAt: item.createdAt == null ? undefined : String(item.createdAt),
+    updatedAt: item.updatedAt == null ? undefined : String(item.updatedAt),
+    bindings: Array.isArray(item.bindings) ? item.bindings as Array<Record<string, unknown>> : undefined,
   };
 }
 
@@ -392,6 +488,7 @@ export const knowledgeApi = {
       roles: Array.isArray(data.roles) ? data.roles.map((item) => normalizeHrRole(item as Record<string, unknown>)) : [],
       modelProfiles: Array.isArray(data.modelProfiles) ? data.modelProfiles.map((item) => normalizeModelProfile(item as Record<string, unknown>)) : [],
       employees: Array.isArray(data.employees) ? data.employees.map((item) => normalizeAiEmployee(item as Record<string, unknown>)) : [],
+      skills: Array.isArray(data.skills) ? data.skills.map((item) => normalizeSkillRepositoryItem(item as Record<string, unknown>)) : [],
       customers: Array.isArray(data.customers) ? data.customers.map((item) => normalizeCustomerMember(item as Record<string, unknown>)) : [],
       customerRoles: Array.isArray(data.customerRoles) ? data.customerRoles.map((item) => normalizeHrRole(item as Record<string, unknown>)) : [],
       customerDepartmentVisibility: Array.isArray(data.customerDepartmentVisibility)
@@ -416,6 +513,7 @@ export const knowledgeApi = {
       roles: Array.isArray(data.roles) ? data.roles.map((item) => normalizeHrRole(item as Record<string, unknown>)) : [],
       modelProfiles: Array.isArray(data.modelProfiles) ? data.modelProfiles.map((item) => normalizeModelProfile(item as Record<string, unknown>)) : [],
       employees: Array.isArray(data.employees) ? data.employees.map((item) => normalizeAiEmployee(item as Record<string, unknown>)) : [],
+      skills: Array.isArray(data.skills) ? data.skills.map((item) => normalizeSkillRepositoryItem(item as Record<string, unknown>)) : [],
       customers: Array.isArray(data.customers) ? data.customers.map((item) => normalizeCustomerMember(item as Record<string, unknown>)) : [],
       customerRoles: Array.isArray(data.customerRoles) ? data.customerRoles.map((item) => normalizeHrRole(item as Record<string, unknown>)) : [],
       customerDepartmentVisibility: Array.isArray(data.customerDepartmentVisibility)
@@ -444,6 +542,71 @@ export const knowledgeApi = {
       body: JSON.stringify({ packageIds: packageIds.map((item) => Number(item)) }),
     });
     return normalizeAiEmployee(data);
+  },
+  updateAiEmployeeSkills: async (id: string, skillIds: string[]) => {
+    const data = await request<Record<string, unknown>>(`/api/admin/ai-employees/${id}/skills`, {
+      method: 'PUT',
+      body: JSON.stringify({ skillIds: skillIds.map((item) => Number(item)) }),
+    });
+    return normalizeAiEmployee(data);
+  },
+  updateAiEmployeeAssessmentRules: async (id: string, rules: EmployeeAssessmentRule[]) => {
+    const data = await request<Record<string, unknown>>(`/api/admin/ai-employees/${id}/assessment-rules`, {
+      method: 'PUT',
+      body: JSON.stringify({ rules }),
+    });
+    return normalizeAiEmployee(data);
+  },
+  getAiEmployeePerformance: async (id: string) => {
+    const data = await request<Record<string, unknown>>(`/api/admin/ai-employees/${id}/performance`);
+    return normalizeEmployeePerformance(data);
+  },
+  offlineAiEmployee: async (id: string, reason = '离职/下线') => {
+    const data = await request<Record<string, unknown>>(`/api/admin/ai-employees/${id}/offline`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+    return normalizeAiEmployee(data);
+  },
+  recordAiEmployeeUsage: async (id: string, payload: Record<string, unknown>) => {
+    const data = await request<Record<string, unknown>>(`/api/admin/ai-employees/${id}/usage-records`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return normalizeEmployeePerformance(data);
+  },
+  listSkillRepository: async (reviewStatus = '') => {
+    const query = reviewStatus ? `?reviewStatus=${encodeURIComponent(reviewStatus)}` : '';
+    const data = await request<Array<Record<string, unknown>>>(`/api/admin/skill-repository${query}`);
+    return data.map(normalizeSkillRepositoryItem);
+  },
+  getSkillRepositoryItem: async (id: string) => {
+    const data = await request<Record<string, unknown>>(`/api/admin/skill-repository/${id}`);
+    return normalizeSkillRepositoryItem(data);
+  },
+  createSkillRepositoryItem: async (payload: Partial<SkillRepositoryItem>) => {
+    const data = await request<Record<string, unknown>>('/api/admin/skill-repository', { method: 'POST', body: JSON.stringify(payload) });
+    return normalizeSkillRepositoryItem(data);
+  },
+  updateSkillRepositoryItem: async (id: string, payload: Partial<SkillRepositoryItem>) => {
+    const data = await request<Record<string, unknown>>(`/api/admin/skill-repository/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
+    return normalizeSkillRepositoryItem(data);
+  },
+  submitSkillRepositoryReview: async (id: string) => {
+    const data = await request<Record<string, unknown>>(`/api/admin/skill-repository/${id}/submit-review`, { method: 'POST' });
+    return normalizeSkillRepositoryItem(data);
+  },
+  approveSkillRepositoryItem: async (id: string) => {
+    const data = await request<Record<string, unknown>>(`/api/admin/skill-repository/${id}/approve`, { method: 'POST', body: JSON.stringify({ reviewedBy: 'admin' }) });
+    return normalizeSkillRepositoryItem(data);
+  },
+  rejectSkillRepositoryItem: async (id: string) => {
+    const data = await request<Record<string, unknown>>(`/api/admin/skill-repository/${id}/reject`, { method: 'POST', body: JSON.stringify({ reviewedBy: 'admin' }) });
+    return normalizeSkillRepositoryItem(data);
+  },
+  archiveSkillRepositoryItem: async (id: string) => {
+    const data = await request<Record<string, unknown>>(`/api/admin/skill-repository/${id}/archive`, { method: 'POST' });
+    return normalizeSkillRepositoryItem(data);
   },
 
   getRagOverview: () => request<Record<string, unknown>>('/api/rag/overview'),

@@ -77,3 +77,20 @@ class WikiCandidateCreate(BaseModel):
     title: str
     draftContent: str
     sourceSummary: Optional[str] = None
+
+
+class SkillProposalCreate(BaseModel):
+    taskId: Optional[str] = None
+    demandGroupId: Optional[str] = None
+    sourceEmployeeId: Optional[str] = None
+    code: str
+    name: str
+    description: Optional[str] = None
+    departmentId: Optional[int] = None
+    skillType: str = "tool"
+    skillLevel: Literal["basic", "advanced"] = "basic"
+    invocationMode: str = "tool_call"
+    inputSchemaJson: str = "{}"
+    outputSchemaJson: str = "{}"
+    orchestrationConfigJson: str = "{}"
+    guardrailsJson: str = "{}"

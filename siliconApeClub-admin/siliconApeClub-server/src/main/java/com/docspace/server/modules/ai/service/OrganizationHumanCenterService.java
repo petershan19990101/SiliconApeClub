@@ -16,6 +16,7 @@ public class OrganizationHumanCenterService {
     private final JdbcTemplate jdbcTemplate;
     private final KnowledgeService knowledgeService;
     private final AiEmployeeService aiEmployeeService;
+    private final SkillRepositoryService skillRepositoryService;
 
     public Map<String, Object> overview() {
         Map<String, Object> result = new LinkedHashMap<String, Object>();
@@ -37,6 +38,7 @@ public class OrganizationHumanCenterService {
                         "FROM hr_model_profile ORDER BY name",
                 knowledgeService.rowMapper()));
         result.put("employees", aiEmployeeService.list());
+        result.put("skills", skillRepositoryService.list(null));
         result.put("customers", jdbcTemplate.query(
                 "SELECT id, code, name, customer_type, principal_code, contact_name, contact_email, status, metadata_json, created_at, updated_at " +
                         "FROM customer_member ORDER BY updated_at DESC",

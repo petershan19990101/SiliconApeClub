@@ -44,7 +44,7 @@ export function LibraryToolbar({
           </button>
           <ChevronRight size={12} />
           <button onClick={onNavigateRoot} className="transition hover:text-blue-700">
-            知识资产
+            文档管理
           </button>
           {currentFolderPath.map((folder, index) => (
             <React.Fragment key={folder.id}>
@@ -60,9 +60,9 @@ export function LibraryToolbar({
         </nav>
         <div className="flex items-end justify-between">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">{currentFolder ? currentFolder.name : '知识资产库'}</h1>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900">{currentFolder ? currentFolder.name : '文档管理'}</h1>
             <p className="mt-1 text-sm text-slate-500">
-              {currentFolder ? '当前目录下展示子目录与知识资产，点击面包屑可快速返回上级。' : '统一管理上传、解析校正、审核发布、Wiki 化与 RAG 入库的知识资产。'}
+              {currentFolder ? '当前目录下展示子目录与文档，点击面包屑可快速返回上级。' : '统一管理上传、解析校正、审核发布、Wiki 化与 RAG 入库的文档。'}
             </p>
           </div>
           <div className="flex gap-3">

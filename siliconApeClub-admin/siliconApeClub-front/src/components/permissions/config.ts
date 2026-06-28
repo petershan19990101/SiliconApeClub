@@ -6,7 +6,7 @@
 
 export const ROUTE_KEY_OPTIONS = [
   { value: 'dashboard', label: '工作台' },
-  { value: 'library', label: '知识资产' },
+  { value: 'library', label: '文档管理' },
   { value: 'search', label: '全域检索' },
   { value: 'permission', label: '权限管理' },
   { value: 'permission_menus', label: '权限管理 / 菜单管理' },
