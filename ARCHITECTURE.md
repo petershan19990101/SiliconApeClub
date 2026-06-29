@@ -24,6 +24,10 @@
 
 ## 2. 设计原则
 
+### 2.0 开发期架构纯洁性优先
+
+当前项目仍处于核心架构成型期。遇到跨服务边界、配置权威源、数据生命周期和 AI 调用链路问题时，优先保持职责清晰、配置源统一、运行证据可追溯；不以局部最小改动牺牲长期边界。前端概念、后端账本、模型配置、知识同步和运行时调用必须分别落在各自合适的服务边界内。
+
 ### 2.1 当前采用模块化服务边界
 
 当前架构采用“管理台模块化单体 + 平级知识服务 + Docker Compose 编排”的形态。`siliconApeClub-server` 承载管理台后端与 API Gateway 合并能力，`retrieval-service`、`knowledge-pipeline-worker`、`knowledge-runtime-service`、`task-memory-service` 作为根目录平级服务独立运行。
@@ -78,7 +82,7 @@ AI 员工的每次检索和引用都必须可回放。
 
 Worker Platform 负责：
 
-- 登录鉴权、客户需求分组、历史聊天记录和产出物聚合。
+- 登录鉴权、服务对话归档、历史聊天记录和产出物聚合。
 - 初始化业务前台角色，并按公司组织关系接待、澄清、拆解和派发任务。
 - 从管理台组织与人力中心投影公司组织、AI 员工、上下级关系、客户可见部门、客户可见员工权限、审核通过的 Skill 和员工技能绑定。
 - 加载 AI 员工身份、岗位知识包、Skill、权限边界、任务上下文和历史记忆。
@@ -145,14 +149,16 @@ AI 能力层
 
 | 逻辑服务 | 当前物理承载 | 当前职责 | 数据边界 |
 | --- | --- | --- | --- |
-| Admin Console Frontend | `siliconApeClub-front` | 硅基猿猴俱乐部管理台静态入口，承载知识资产、Wiki 中心、RAG 管理台、组织与人力中心、技能仓库、客户会员中心、岗位知识管理、权限与知识健康运营 | 无状态静态资源 |
-| Worker Platform Frontend | `siliconApeClub-worker-front` | AI 员工平台客户端入口，承载需求工作台、聊天记录、多模态 block 渲染、组织员工视图和任务账本展示 | 无状态静态资源 |
-| Worker Platform API | `siliconApeClub-worker-platform` | AI 员工平台运行期 API，承载登录、客户需求分组、会话、消息、业务前台、员工直派、任务恢复 | `wp_*` 表 |
-| Worker Orchestrator | `siliconApeClub-worker-platform` | 组织关系路由、岗位知识包加载、Skill 加载、任务账本、部门协作、记忆维护、知识沉淀发起 | `wp_*` 表 + 内部知识服务 |
+| Admin Console Frontend | `siliconApeClub-front` | 硅基猿猴俱乐部管理台静态入口，承载文档管理、Wiki 中心、RAG 管理台、组织与人力中心、技能仓库、系统快捷能力、客户会员中心、岗位知识管理、权限与知识健康运营 | 无状态静态资源 |
+| Worker Platform Frontend | `siliconApeClub-worker-front` | AI 员工服务台客户端入口，承载聊天记录、多模态 block 渲染、系统快捷能力表单、员工直通和任务账本展示 | 无状态静态资源 |
+| Worker Platform API | `siliconApeClub-worker-platform` | AI 员工平台运行期 API，承载登录、服务对话归档、会话、消息、业务前台、对客能力表单、员工直派、任务恢复 | `wp_*` 表 |
+| Worker Orchestrator | `siliconApeClub-worker-platform` | 组织关系路由、岗位知识包加载、Skill 加载、确定性业务动作、任务账本、部门协作、记忆维护、知识沉淀发起 | `wp_*` 表 + 内部知识服务 |
 | API Gateway | `siliconApeClub-server` | `/api/**` 统一入口、JWT 鉴权、CORS、管理台后端代理 | 共享主库 |
 | Auth & IAM Service | `siliconApeClub-server` | 用户、角色、部门、菜单、按钮权限、AI 员工身份、客户会员和权限边界 | 共享主库 |
-| Organization & Human Center Service | `siliconApeClub-server` | 公司组织、岗位、AI 员工属性、员工生命周期、联系人关系、个人记忆策略、模型配置、考核规则、员工计量和客户可见性维护 | `ds_department`、`ds_ai_employee`、`hr_employee_*`、`customer_*` |
-| Skill Repository Service | `siliconApeClub-server` | 人类维护或 AI 员工总结技能的草稿、提交审核、审核通过、驳回、归档和员工绑定源数据 | `hr_skill_repository`、`hr_skill_binding` |
+| Organization & Human Center Service | `siliconApeClub-server` | 公司组织、岗位、AI 员工属性、员工生命周期、联系人关系、个人记忆策略、模型 Profile 选择、考核规则、员工计量、客户角色默认可见性和会员附加可见性维护 | `ds_department`、`ds_ai_employee`、`hr_employee_*`、`customer_*` |
+| AI Model Configuration Service | `siliconApeClub-server` | 管理 LLM、Embedding、Rerank 的供应商、端点、模型、密钥、超时、默认配置和降级策略；系统设置是模型配置权威源 | `sys_ai_model_profile` |
+| Skill Repository Service | `siliconApeClub-server` | 人类维护或 AI 员工总结技能的草稿、提交审核、审核通过、驳回、归档和员工绑定源数据，面向员工执行能力、工具能力和岗位能力 | `hr_skill_repository`、`hr_skill_binding` |
+| Client Quick Capability Service | `siliconApeClub-server` | 管理客户端快捷能力分组、业务系统服务编码、动作码、表单 Schema、展示 HTML、关键词、排序和外部/内部可见边界 | `client_quick_capability_group`、`client_quick_capability` |
 | Doc Service | `siliconApeClub-server` | 文档上传、目录、版本、解析产物、源文件管理、审核发布、文档到 LLM Wiki/RAG 生命周期入口 | 共享主库 + MinIO |
 | Wiki Center Service | `siliconApeClub-server` | Wiki 页面、版本、发布、归档、结构分组、权限展示、页面关系维护 | 共享主库 |
 | RAG Management Service | `siliconApeClub-server` + `retrieval-service` | RAG 调试回放、索引 chunk 可见性、ACL policy/binding 管控、chunk 治理 | 共享主库 + pgvector |
@@ -602,6 +608,7 @@ GET  /api/worker-platform/auth/me
 POST /api/worker-platform/auth/logout
 
 GET  /api/worker-platform/bootstrap
+GET  /api/worker-platform/quick-capabilities
 GET  /api/worker-platform/demand-groups
 POST /api/worker-platform/demand-groups
 GET  /api/worker-platform/demand-groups/{groupId}
@@ -609,6 +616,7 @@ GET  /api/worker-platform/demand-groups/{groupId}/sessions
 POST /api/worker-platform/demand-groups/{groupId}/sessions
 GET  /api/worker-platform/sessions/{sessionId}/messages
 POST /api/worker-platform/sessions/{sessionId}/messages
+POST /api/worker-platform/sessions/{sessionId}/quick-capabilities/{capabilityCode}/open
 
 GET  /api/worker-platform/org/tree
 GET  /api/worker-platform/org/employees
@@ -626,18 +634,21 @@ POST /api/worker-platform/tasks/{taskId}/handoff
 POST /api/worker-platform/tasks/{taskId}/review
 
 GET  /api/worker-platform/skills
+POST /api/worker-platform/skills/proposals
 POST /api/worker-platform/wiki-candidates
 ```
 
 接口约束：
 
-- 客户端必须登录；外部客户只能访问自己的需求组、会话、任务和产出。
+- 客户端必须登录；外部客户只能访问自己的服务对话、会话、任务和产出。
 - 内部人员按 `wp_employee_permission` 查看组织关系、咨询员工或直派员工。
 - 外部客户可见的组织树和员工列表来自客户会员中心授权；未授权员工不会在 worker front 暴露。
-- `wp_org_unit`、`wp_ai_employee`、`wp_org_relation`、`wp_employee_permission` 是 worker platform 的运行时投影，权威配置源在管理台 `ds_*`、`hr_*`、`customer_*` 表。
+- `wp_org_unit`、`wp_ai_employee`、`wp_org_relation`、`wp_employee_permission` 是 worker platform 的运行时投影，权威配置源在管理台 `ds_*`、`hr_*`、`customer_*` 表；客户权限由“客户角色默认规则 + 会员附加规则”取并集。
 - 消息输出采用 typed block：`markdown`、`html`、`form`、`artifact`、`task_status`、`org_route`、`employee_card`、`handoff`。
 - 精准数据提交优先走 `form` block；`html` block 只做受控展示。
-- 长任务必须写入 `wp_task_run`、`wp_task_event`、`wp_task_checkpoint`，服务重启后按需求组恢复。
+- 对客确定性能力来自管理台 `系统快捷能力`，它表示业务系统对客接口，不属于 AI 员工 Skill；worker platform 从 `client_quick_capability_group`、`client_quick_capability` 读取分组、服务编码、动作码、表单 Schema 和可见性。
+- 表单提交写入 `wp_form_submission`，再根据 `transactionServiceCode + actionCode + values` 执行业务动作并写入任务账本；下单、查询订单进度、退货、查询地址等能力可以不调用大模型。
+- 长任务必须写入 `wp_task_run`、`wp_task_event`、`wp_task_checkpoint`，服务重启后按服务对话和任务账本恢复。
 - Worker Platform 服务端内部调用 Knowledge Runtime、Task Memory、Retrieval 和管理台后端，内部接口不暴露给浏览器。
 
 内部知识服务接口仍保留：
@@ -660,7 +671,7 @@ POST /api/wiki/proposals
 | 项目 | 当前选型 | 当前用途 |
 | --- | --- | --- |
 | 前端框架 | React + Vite + TypeScript | 管理台单页应用 |
-| AI 员工平台前端 | React + Vite + TypeScript | `siliconApeClub-worker-front` 需求工作台、聊天、多模态 block 渲染 |
+| AI 员工平台前端 | React + Vite + TypeScript | `siliconApeClub-worker-front` AI 员工服务台、聊天、多模态 block 渲染 |
 | 样式体系 | Tailwind CSS + 自研组件 | 表格、表单、弹窗、权限控件、知识运营页面 |
 | 文档预览 | `pdfjs-dist`、`docx-preview`、`xlsx`、自研渲染器 | 文档源文件和解析结果预览 |
 | Wiki 编辑 | Markdown Editor + Markdown 渲染 | Wiki 正文编辑、解析内容校正、知识提案展示 |
@@ -687,7 +698,7 @@ POST /api/wiki/proposals
 | 场景 | 当前选型 | 当前用途 |
 | --- | --- | --- |
 | 事务主库 | PostgreSQL | 用户、权限、文档、Wiki、岗位知识、AI 员工、审计、任务记忆 |
-| 员工平台运行库 | PostgreSQL `wp_*` 表 | 客户身份、需求组、会话、消息、组织关系、员工权限、任务账本、协作线程、Skill、候选 Wiki |
+| 员工平台运行库 | PostgreSQL `wp_*` 表 | 客户身份、服务对话内部归档、会话、消息、表单提交、组织关系、员工权限、任务账本、协作线程、Skill、候选 Wiki |
 | 向量索引 | pgvector | `ks_chunk.embedding` 和 RAG 召回 |
 | 关系图谱 | PostgreSQL 表关系 | `ks_wiki_relation` 承载 Wiki 轻量关系网络 |
 | 对象存储 | MinIO | 源文件、解析产物、预览缓存 |
@@ -698,12 +709,21 @@ POST /api/wiki/proposals
 
 | 能力 | 当前选型 | 当前用途 |
 | --- | --- | --- |
-| Embedding | 阿里云百炼 DashScope，缺省 hash fallback | chunk embedding、开发环境无 key 时可运行 |
-| Rerank | DashScope rerank 接口，可缺省跳过 | RAG 管理台调试和 AI 员工检索 |
-| LLM | 外部大模型 API 预留 | Wiki 生成、摘要、知识反馈扩展 |
+| AI 模型配置 | 管理台系统设置 `AI 模型配置` + `sys_ai_model_profile` | LLM、Embedding、Rerank 的端点、模型、密钥、默认配置、超时和 fallback 策略权威源 |
+| Embedding | OpenAI-compatible Embedding API，默认种子为阿里云百炼 `text-embedding-v4` | `ks_chunk.embedding`、RAG 查询向量化；未配置 key 时仅开发环境显式使用 hash fallback |
+| Rerank | 可配置 Rerank API，默认种子为 DashScope rerank | RAG 管理台调试和 AI 员工检索重排；可按配置关闭或降级 |
+| LLM | OpenAI-compatible Chat Completion API，默认种子为阿里云百炼兼容模式 | 文档解析后生成 LLM Wiki 草稿、AI 员工聊天分析、后续知识沉淀与摘要 |
 | 文档解析 | Apache PDFBox、Apache POI、Java HTML Parser、通用文本直读解析器、LibreOffice 预览转换 | PDF、Word、PPT、Markdown、文本、SQL、LOG、HTML 等文档解析与预览 |
 | 向量库 | pgvector | RAG 向量召回 |
 | 检索服务 | FastAPI `retrieval-service` | 搜索、debug、sync job、权限校验 callback、citation callback |
+
+当前模型调用边界：
+
+- 文档解析完成后，`KnowledgePipelineService` 调用 `purpose=document_to_wiki` 的 LLM 配置，把解析 Markdown 转为 Wiki 摘要与正文；调用失败且配置允许 fallback 时，才使用规则化 Wiki 草稿。
+- Wiki 或文档写入 RAG 时，`KnowledgeService` 与 `retrieval-service` 调用 `purpose=rag_embedding` 的 Embedding 配置生成向量；fallback embedding 会在 chunk metadata 中显式标记。
+- RAG 调试和检索重排调用 `purpose=rag_rerank` 的配置。
+- AI 员工平台聊天分析由 `siliconApeClub-worker-platform` 调用 `purpose=worker_chat` 的 LLM 配置；浏览器永远只访问 worker platform，不直连模型、Knowledge Runtime、Task Memory 或 Retrieval。
+- 开发期允许 fallback 保证本地 Docker 可运行，但 fallback 必须可观测，不能伪装成真实模型调用成功。
 
 ### 6.5 运维与可观测
 
@@ -712,9 +732,9 @@ POST /api/wiki/proposals
 | 本地/测试部署 | Docker Compose | `--profile app` 启动管理台、知识服务和中间件 |
 | 日志 | 容器 stdout + 应用日志文件 | Docker 日志查看、后端 `logs/siliconApeClub-server.log` |
 | 健康检查 | HTTP health / OpenAPI / Docker healthcheck | 服务启动验证、测试验收 |
-| 数据库迁移 | Flyway | PostgreSQL schema 初始化和菜单/权限升级 |
+| 数据库迁移 | Flyway | 仅加载 `db/migration-postgres`，负责 PostgreSQL schema 初始化和菜单/权限升级 |
 | 镜像 | Dockerfile + Compose build | 前端静态镜像、后端 WAR 运行镜像、Python 服务镜像 |
-| 配置与密钥 | 环境变量 | 数据库、Redis、MinIO、RocketMQ、DashScope key |
+| 配置与密钥 | 环境变量 + 管理台系统设置 | 基础设施连接仍由环境变量提供；AI 模型供应商、端点、模型与 API key 由 `sys_ai_model_profile` 管理 |
 
 ## 7. 数据与索引架构
 
@@ -1343,9 +1363,10 @@ Kubernetes
 - 权限管理：菜单、角色、用户、部门、按钮权限、AI 员工可读边界。
 - Wiki 中心：结构分组、页面列表、详情、ACL 展示、关系图谱、关系新增与删除。
 - RAG 管理台：RAG 调试回放、active chunk 可见性、ACL policy/binding 管控、chunk 治理。
-- 组织与人力中心：公司组织、角色、岗位、AI 员工基础信息、职责、生命周期、审核通过技能、联系人关系、个人记忆策略、模型配置、成本基线、考核规则、绩效计量、岗位知识绑定。
-- 技能仓库：维护 `hr_skill_repository`、`hr_skill_binding`，人类维护和 AI 员工总结的技能都必须审核通过后才能投影到 worker platform。
-- 客户会员中心：客户会员、客户角色、可见部门、可见员工、可咨询和可派活权限维护。
+- 组织与人力中心：公司组织、角色、岗位、AI 员工基础信息、职责、生命周期、审核通过技能、联系人关系、个人记忆策略、模型 Profile 下拉选择、成本基线、考核规则、绩效计量、岗位知识绑定。
+- 技能仓库：维护 `hr_skill_repository`、`hr_skill_binding`，人类维护和 AI 员工总结的技能都必须审核通过后才能投影到 worker platform；高级技能由后端强制要求顶级管理人员维护、审核和绑定。
+- 系统快捷能力：维护客户端对客快捷能力分组、能力编码、交易系统服务编码、动作码、表单 Schema、展示 HTML、关键词、启停、排序和外部/内部可见性。
+- 客户会员中心：客户会员、客户角色、角色默认可见部门/员工、会员附加可见部门/员工、可咨询和可派活权限维护。
 - 岗位知识管理：基于 Wiki 页面集合的岗位知识 profile，支持增删改查、提交审核、审核通过、驳回、归档和删除。
 - 知识健康：健康问题、同步异常、权限异常、维护窗口和健康报告入口。
 
@@ -1361,10 +1382,14 @@ Kubernetes
 ### 13.4 AI 员工平台能力
 
 - 客户端登录鉴权：外部客户、内部人员、管理员三类种子身份。
-- 需求工作台：按客户需求组管理历史需求、会话、任务和产出物。
+- AI 员工服务台：以聊天框为主入口，按服务对话查看历史消息、任务和产出物；`wp_demand_group` 只作为后端内部归档结构。
 - 业务前台：外部客户默认由 `业务前台 Ada` 接待，负责需求澄清和组织派发。
+- 对客快捷能力：worker front 从 worker platform 读取 `系统快捷能力` 投影，按分组默认展开展示；客户可直接打开业务表单。
+- 员工直通：worker front 按部门折叠展示可见员工；外部客户默认通过 `external_customer` 角色看到客服部员工，可咨询不可派活，内部人员按授权范围展示。
+- 表单化业务动作：AI 员工在聊天中识别到下单、查订单、退货、查询地址等确定性需求时，返回对应 `form` block；表单提交写入 `wp_form_submission` 并按 `transactionServiceCode + actionCode` 执行，不强制调用大模型。
 - 组织关系：worker platform 启动时从管理台组织与人力中心投影公司、部门、中心、战队、岗位、AI 员工和上下级/协作关系。
-- Skill 加载：worker platform 启动时从管理台技能仓库投影审核通过的技能和员工技能绑定到 `wp_worker_skill`、`wp_skill_binding`；高级技能由管理台技能等级和员工权限共同约束。
+- Skill 加载：worker platform 启动时从管理台技能仓库投影审核通过的员工执行技能和员工技能绑定到 `wp_worker_skill`、`wp_skill_binding`；高级技能由管理台后端按顶级管理人员身份强校验维护、审核和绑定。
+- Skill 沉淀：AI 员工或内部人员可通过 worker platform 提交技能提案或业务能力表单提案，写入管理台 `hr_skill_repository(review_status=pending_review, enabled=0, source_type=ai_employee)`，审核通过后才会进入运行时投影。
 - 员工权限：内部人员按 `consult_employee`、`assign_employee` 权限咨询或直派员工；外部客户按客户会员中心授权查看部分部门和员工，并只能咨询或派活授权员工。
 - 多模态输出：支持 markdown、受控 html、动态 form、artifact、task_status、org_route、employee_card、handoff block。
 - 长任务恢复：任务写入 `wp_task_run`、`wp_task_event`、`wp_task_checkpoint`，支持恢复、取消、转派和审核。
@@ -1376,4 +1401,4 @@ Kubernetes
 
 管理台负责知识治理、权限、配置、审核、观测和运营；AI 员工平台负责客户入口、业务前台、组织化派发、员工直派、任务账本、会话归档、长任务恢复、Skill 加载和知识沉淀发起；Knowledge Runtime、Task Memory、Retrieval 和 Pipeline 服务作为内部知识能力，为 worker platform 提供 Wiki、RAG、任务记忆和知识流水线支撑。
 
-这套基线保证三件事：人类能管理知识，客户能通过业务前台或授权员工提交需求，AI 员工能按组织关系安全调用知识、协作交付并沉淀自己使用过的知识。
+这套基线保证三件事：人类能管理知识，客户能通过业务前台或授权员工发起服务对话，AI 员工能按组织关系安全调用知识、协作交付并沉淀自己使用过的知识。

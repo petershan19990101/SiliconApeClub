@@ -1,13 +1,15 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
-import { Cpu, FileText, LayoutTemplate, Settings2, SlidersHorizontal } from 'lucide-react';
+import { Bot, Cpu, FileText, LayoutTemplate, Settings2, SlidersHorizontal } from 'lucide-react';
 import { useUser } from '../contexts/UserContext';
 import { SystemMenuNode } from '../types';
 import { ParseConfigSettings } from './settings/ParseConfigSettings';
+import { AiModelSettings } from './settings/AiModelSettings';
 import { SettingsPlaceholder } from './settings/SettingsPlaceholder';
 import { InlineHelpTip } from './ui/InlineHelpTip';
 
 type SettingsTab =
   | 'settings_parse_config'
+  | 'settings_ai_model'
   | 'settings_document_policy'
   | 'settings_integration_switches'
   | 'settings_platform_info';
@@ -21,6 +23,11 @@ const TAB_META: Record<SettingsTab, {
     title: '解析配置',
     description: '维护文件类型与解析引擎之间的数据库绑定关系，作为文档解析链路的运行时配置入口。',
     icon: SlidersHorizontal,
+  },
+  settings_ai_model: {
+    title: 'AI 模型配置',
+    description: '维护文档生成 LLM Wiki、RAG Embedding/Rerank 与 AI 员工分析所使用的模型 profile。',
+    icon: Bot,
   },
   settings_document_policy: {
     title: '文档策略',
@@ -128,6 +135,8 @@ export function SystemSettings() {
 
 function renderTab(tab: SettingsTab) {
   switch (tab) {
+    case 'settings_ai_model':
+      return <AiModelSettings />;
     case 'settings_document_policy':
       return <SettingsPlaceholder title="文档策略" description={TAB_META.settings_document_policy.description} icon={TAB_META.settings_document_policy.icon} />;
     case 'settings_integration_switches':

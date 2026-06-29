@@ -2,6 +2,8 @@ package com.docspace.server.modules.knowledge.service;
 
 import com.docspace.server.common.exception.BusinessException;
 import com.docspace.server.common.util.JsonUtils;
+import com.docspace.server.modules.ai.service.AiModelProfileRuntimeService;
+import com.docspace.server.modules.ai.service.AiModelProfileRuntimeService.EmbeddingResult;
 import com.docspace.server.modules.knowledge.dto.PermissionCheckRequest;
 import com.docspace.server.modules.knowledge.dto.SyncJobRequest;
 import com.docspace.server.security.SecurityUser;
@@ -30,6 +32,7 @@ public class KnowledgeService {
 
     private final JdbcTemplate jdbcTemplate;
     private final JsonUtils jsonUtils;
+    private final AiModelProfileRuntimeService aiModelProfileRuntimeService;
 
     @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> createSyncJob(SyncJobRequest request, SecurityUser currentUser) {
@@ -108,19 +111,25 @@ public class KnowledgeService {
                     "SELECT COALESCE(MAX(index_version), 0) + 1 FROM ks_index_record WHERE wiki_page_id = ?",
                     Integer.class, pageId);
             int sequence = 0;
+            EmbeddingResult lastEmbedding = null;
             for (String chunk : chunks) {
                 sequence++;
                 String hash = sha256(chunk);
+                EmbeddingResult embedding = aiModelProfileRuntimeService.embedForRag(chunk);
+                lastEmbedding = embedding;
                 Map<String, Object> metadataMap = new LinkedHashMap<String, Object>();
                 metadataMap.put("sequence", sequence);
                 metadataMap.put("sourceTitle", page.get("title"));
                 metadataMap.put("source", "wiki_page");
+                metadataMap.put("embeddingRealCall", embedding.getRealCall());
+                metadataMap.put("embeddingFallbackUsed", embedding.getFallbackUsed());
+                metadataMap.put("embeddingFallbackReason", embedding.getFallbackReason());
                 String metadata = jsonUtils.toJson(metadataMap);
                 jdbcTemplate.update(
                         "INSERT INTO ks_chunk(source_type, source_id, source_version, wiki_page_id, wiki_page_version, " +
                                 "content_hash, chunk_text, chunk_summary, metadata_json, acl_policy_id, acl_version, security_level, " +
                                 "department_tags, knowledge_status, embedding_model, embedding_version, embedding, index_version) " +
-                                "VALUES ('wiki_page', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'text-embedding-v4', 'mvp-local-hash', CAST(? AS vector), ?)",
+                                "VALUES ('wiki_page', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, CAST(? AS vector), ?)",
                         pageId,
                         version,
                         pageId,
@@ -133,14 +142,18 @@ public class KnowledgeService {
                         page.get("aclVersion") == null ? 1 : asInteger(page.get("aclVersion")),
                         page.get("securityLevel") == null ? "internal" : asString(page.get("securityLevel")),
                         page.get("departmentId") == null ? "" : String.valueOf(page.get("departmentId")),
-                        deterministicEmbedding(chunk),
+                        embedding.getModelName(),
+                        embedding.getEmbeddingVersion(),
+                        embedding.getVectorLiteral(),
                         indexVersion);
             }
+            EmbeddingResult indexEmbedding = lastEmbedding == null ? aiModelProfileRuntimeService.embedForRag(asString(page.get("content"))) : lastEmbedding;
             jdbcTemplate.update(
                     "INSERT INTO ks_index_record(source_type, source_id, source_version, wiki_page_id, wiki_page_version, content_hash, " +
                             "chunk_count, embedding_model, embedding_version, index_version, index_status, indexed_at) " +
-                            "VALUES ('wiki_page', ?, ?, ?, ?, ?, ?, 'text-embedding-v4', 'mvp-local-hash', ?, 'success', ?)",
-                    pageId, version, pageId, version, sha256(asString(page.get("content"))), chunks.size(), indexVersion, LocalDateTime.now());
+                            "VALUES ('wiki_page', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'success', ?)",
+                    pageId, version, pageId, version, sha256(asString(page.get("content"))), chunks.size(),
+                    indexEmbedding.getModelName(), indexEmbedding.getEmbeddingVersion(), indexVersion, LocalDateTime.now());
             jdbcTemplate.update("UPDATE ks_wiki_page SET sync_status = 'synced', health_status = 'normal', updated_at = ? WHERE id = ?",
                     LocalDateTime.now(), pageId);
             jdbcTemplate.update("UPDATE ks_sync_job SET status = 'success', finished_at = ?, updated_at = ? WHERE id = ?",
@@ -190,18 +203,24 @@ public class KnowledgeService {
                     "SELECT COALESCE(MAX(index_version), 0) + 1 FROM ks_index_record WHERE source_type = 'document' AND source_id = ?",
                     Integer.class, documentId);
             int sequence = 0;
+            EmbeddingResult lastEmbedding = null;
             for (String chunk : chunks) {
                 sequence++;
+                EmbeddingResult embedding = aiModelProfileRuntimeService.embedForRag(chunk);
+                lastEmbedding = embedding;
                 Map<String, Object> metadataMap = new LinkedHashMap<String, Object>();
                 metadataMap.put("sequence", sequence);
                 metadataMap.put("sourceTitle", document.get("name"));
                 metadataMap.put("source", "document");
                 metadataMap.put("syncJobId", jobId);
+                metadataMap.put("embeddingRealCall", embedding.getRealCall());
+                metadataMap.put("embeddingFallbackUsed", embedding.getFallbackUsed());
+                metadataMap.put("embeddingFallbackReason", embedding.getFallbackReason());
                 jdbcTemplate.update(
                         "INSERT INTO ks_chunk(source_type, source_id, source_version, wiki_page_id, wiki_page_version, " +
                                 "content_hash, chunk_text, chunk_summary, metadata_json, acl_policy_id, acl_version, security_level, " +
                                 "department_tags, knowledge_status, embedding_model, embedding_version, embedding, index_version) " +
-                                "VALUES ('document', ?, ?, NULL, NULL, ?, ?, ?, ?, 1, 1, 'internal', ?, 'active', 'text-embedding-v4', 'mvp-local-hash', CAST(? AS vector), ?)",
+                                "VALUES ('document', ?, ?, NULL, NULL, ?, ?, ?, ?, 1, 1, 'internal', ?, 'active', ?, ?, CAST(? AS vector), ?)",
                         documentId,
                         version,
                         sha256(chunk),
@@ -209,14 +228,18 @@ public class KnowledgeService {
                         summarize(chunk),
                         jsonUtils.toJson(metadataMap),
                         document.get("departmentId") == null ? "" : String.valueOf(document.get("departmentId")),
-                        deterministicEmbedding(chunk),
+                        embedding.getModelName(),
+                        embedding.getEmbeddingVersion(),
+                        embedding.getVectorLiteral(),
                         indexVersion);
             }
+            EmbeddingResult indexEmbedding = lastEmbedding == null ? aiModelProfileRuntimeService.embedForRag(content) : lastEmbedding;
             jdbcTemplate.update(
                     "INSERT INTO ks_index_record(source_type, source_id, source_version, wiki_page_id, wiki_page_version, content_hash, " +
                             "chunk_count, embedding_model, embedding_version, index_version, index_status, indexed_at) " +
-                            "VALUES ('document', ?, ?, NULL, NULL, ?, ?, 'text-embedding-v4', 'mvp-local-hash', ?, 'success', ?)",
-                    documentId, version, sha256(content), chunks.size(), indexVersion, LocalDateTime.now());
+                            "VALUES ('document', ?, ?, NULL, NULL, ?, ?, ?, ?, ?, 'success', ?)",
+                    documentId, version, sha256(content), chunks.size(),
+                    indexEmbedding.getModelName(), indexEmbedding.getEmbeddingVersion(), indexVersion, LocalDateTime.now());
             jdbcTemplate.update("UPDATE ks_sync_job SET status = 'success', finished_at = ?, updated_at = ? WHERE id = ?",
                     LocalDateTime.now(), LocalDateTime.now(), jobId);
         } catch (Exception ex) {

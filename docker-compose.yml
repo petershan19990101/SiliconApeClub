@@ -78,8 +78,8 @@ services:
     build:
       context: ./siliconApeClub-admin/siliconApeClub-server
       args:
-        MAVEN_BASE_IMAGE: ${MAVEN_BASE_IMAGE:-maven:3.9.9-eclipse-temurin-8}
-        JRE_BASE_IMAGE: ${JRE_BASE_IMAGE:-eclipse-temurin:8-jre}
+        MAVEN_BASE_IMAGE: ${MAVEN_BASE_IMAGE:-docker.m.daocloud.io/library/maven:3.9.9-eclipse-temurin-8}
+        JRE_BASE_IMAGE: ${JRE_BASE_IMAGE:-docker.m.daocloud.io/eclipse-temurin:8-jre}
     container_name: sac-siliconapeclub-server
     restart: unless-stopped
     depends_on:
@@ -132,7 +132,7 @@ services:
     build:
       context: ./retrieval-service
       args:
-        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.11-slim}
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-docker.m.daocloud.io/library/python:3.11-slim}
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}
     container_name: sac-retrieval-service
     restart: unless-stopped

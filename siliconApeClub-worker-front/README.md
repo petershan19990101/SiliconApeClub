@@ -1,6 +1,6 @@
 # siliconApeClub-worker-front
 
-硅基猿猴俱乐部 AI 员工平台前端，负责客户需求工作台、业务前台聊天、多模态 block 渲染、组织员工视图和任务账本展示。
+硅基猿猴俱乐部 AI 员工平台前端，负责 AI 员工服务台、业务前台聊天、快捷能力表单、多模态 block 渲染、组织员工视图和任务账本展示。
 
 前端在 Docker 中由 Nginx 托管，并将 `/api/worker-platform/**` 代理到后端 `siliconApeClub-worker-platform`。浏览器不直连 Knowledge Runtime、Task Memory、Retrieval。
 

@@ -34,8 +34,9 @@ public class OrganizationHumanCenterService {
                         "FROM hr_role ORDER BY name",
                 knowledgeService.rowMapper()));
         result.put("modelProfiles", jdbcTemplate.query(
-                "SELECT id, code, name, provider, model_name, purpose, config_json, enabled, created_at, updated_at " +
-                        "FROM hr_model_profile ORDER BY name",
+                "SELECT id, profile_code AS code, profile_name AS name, provider, model_name, purpose, config_json, enabled, created_at, updated_at " +
+                        "FROM sys_ai_model_profile WHERE purpose = 'worker_chat' AND enabled = 1 " +
+                        "ORDER BY default_profile DESC, profile_name",
                 knowledgeService.rowMapper()));
         result.put("employees", aiEmployeeService.list());
         result.put("skills", skillRepositoryService.list(null));
@@ -63,6 +64,23 @@ public class OrganizationHumanCenterService {
                         "JOIN ds_ai_employee e ON e.id = v.ai_employee_id " +
                         "LEFT JOIN ds_department d ON d.id = e.department_id " +
                         "ORDER BY c.name, d.sort_order, e.name",
+                knowledgeService.rowMapper()));
+        result.put("customerRoleDepartmentVisibility", jdbcTemplate.query(
+                "SELECT v.id, v.role_id, r.name AS role_name, r.code AS role_code, v.department_id, d.name AS department_name, " +
+                        "v.visibility_type, v.created_at " +
+                        "FROM customer_role_department_visibility v " +
+                        "JOIN customer_role r ON r.id = v.role_id " +
+                        "JOIN ds_department d ON d.id = v.department_id " +
+                        "ORDER BY r.name, d.sort_order",
+                knowledgeService.rowMapper()));
+        result.put("customerRoleEmployeeVisibility", jdbcTemplate.query(
+                "SELECT v.id, v.role_id, r.name AS role_name, r.code AS role_code, v.ai_employee_id, e.name AS employee_name, " +
+                        "e.role_title, d.name AS department_name, v.visibility_type, v.can_consult, v.can_assign, v.created_at " +
+                        "FROM customer_role_employee_visibility v " +
+                        "JOIN customer_role r ON r.id = v.role_id " +
+                        "JOIN ds_ai_employee e ON e.id = v.ai_employee_id " +
+                        "LEFT JOIN ds_department d ON d.id = e.department_id " +
+                        "ORDER BY r.name, d.sort_order, e.name",
                 knowledgeService.rowMapper()));
         return result;
     }
@@ -102,6 +120,49 @@ public class OrganizationHumanCenterService {
                                 "ON CONFLICT (customer_id, ai_employee_id) DO UPDATE SET " +
                                 "can_consult = EXCLUDED.can_consult, can_assign = EXCLUDED.can_assign",
                         customerId,
+                        employeeId,
+                        asBoolean(employee.get("canConsult")) ? 1 : 0,
+                        asBoolean(employee.get("canAssign")) ? 1 : 0);
+            }
+        }
+        return overview();
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public Map<String, Object> replaceCustomerRoleVisibility(Long roleId, Map<String, Object> request) {
+        jdbcTemplate.update("DELETE FROM customer_role_department_visibility WHERE role_id = ?", roleId);
+        jdbcTemplate.update("DELETE FROM customer_role_employee_visibility WHERE role_id = ?", roleId);
+
+        Object departmentIds = request.get("departmentIds");
+        if (departmentIds instanceof List) {
+            for (Object departmentId : (List<?>) departmentIds) {
+                Long value = asLong(departmentId);
+                if (value != null) {
+                    jdbcTemplate.update(
+                            "INSERT INTO customer_role_department_visibility(role_id, department_id, visibility_type) VALUES (?, ?, 'visible') " +
+                                    "ON CONFLICT (role_id, department_id) DO NOTHING",
+                            roleId, value);
+                }
+            }
+        }
+
+        Object employees = request.get("employees");
+        if (employees instanceof List) {
+            for (Object employeeItem : (List<?>) employees) {
+                if (!(employeeItem instanceof Map)) {
+                    continue;
+                }
+                Map<?, ?> employee = (Map<?, ?>) employeeItem;
+                Long employeeId = asLong(employee.get("aiEmployeeId"));
+                if (employeeId == null) {
+                    continue;
+                }
+                jdbcTemplate.update(
+                        "INSERT INTO customer_role_employee_visibility(role_id, ai_employee_id, visibility_type, can_consult, can_assign) " +
+                                "VALUES (?, ?, 'visible', ?, ?) " +
+                                "ON CONFLICT (role_id, ai_employee_id) DO UPDATE SET " +
+                                "can_consult = EXCLUDED.can_consult, can_assign = EXCLUDED.can_assign, updated_at = CURRENT_TIMESTAMP",
+                        roleId,
                         employeeId,
                         asBoolean(employee.get("canConsult")) ? 1 : 0,
                         asBoolean(employee.get("canAssign")) ? 1 : 0);

@@ -21,7 +21,7 @@ export function getVisibleViews(user: User | null): View[] {
     .filter((menu) => menu.type === 'page' && menu.routeKey)
     .map((menu) => menu.routeKey as View)
     .filter((view): view is View =>
-      ['dashboard', 'library', 'search', 'permission', 'wiki', 'position_packages', 'knowledge_health', 'rag_debug', 'ai_employees', 'skill_repository', 'customer_members', 'settings', 'help'].includes(view)
+      ['dashboard', 'library', 'search', 'permission', 'wiki', 'position_packages', 'knowledge_health', 'rag_debug', 'ai_employees', 'skill_repository', 'quick_capabilities', 'customer_members', 'settings', 'help'].includes(view)
     );
 
   return views.length ? views : FALLBACK_VISIBLE_VIEWS;

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Activity, BookOpen, Briefcase, ChevronRight, HelpCircle, LayoutDashboard, Library as LibraryIcon, Search, Settings, Shield, Users, Wrench } from 'lucide-react';
+import { Activity, BookOpen, Briefcase, ChevronRight, HelpCircle, LayoutDashboard, Library as LibraryIcon, Search, Settings, Shield, Users, Wrench, Zap } from 'lucide-react';
 import { SystemMenuNode, View } from '../types';
 import { useAppShell } from '../contexts/AppShellContext';
 import { useUser } from '../contexts/UserContext';
@@ -18,6 +18,7 @@ const ICON_MAP: Record<string, React.ComponentType<{ size?: number }>> = {
   briefcase: Briefcase,
   activity: Activity,
   wrench: Wrench,
+  zap: Zap,
 };
 
 const FALLBACK_MENUS: SystemMenuNode[] = [
@@ -31,6 +32,7 @@ const FALLBACK_MENUS: SystemMenuNode[] = [
   { id: 'ai_employees', code: 'organization_hr.view', name: '组织与人力中心', type: 'page', routeKey: 'ai_employees', icon: 'users', sortOrder: 65, enabled: true, children: [] },
   { id: 'skill_repository', code: 'skill_repository.view', name: '技能仓库', type: 'page', routeKey: 'skill_repository', icon: 'wrench', sortOrder: 67, enabled: true, children: [] },
   { id: 'customer_members', code: 'customer_member.view', name: '客户会员中心', type: 'page', routeKey: 'customer_members', icon: 'users', sortOrder: 68, enabled: true, children: [] },
+  { id: 'quick_capabilities', code: 'quick_capability.view', name: '系统快捷能力', type: 'page', routeKey: 'quick_capabilities', icon: 'zap', sortOrder: 69, enabled: true, children: [] },
   { id: 'settings', code: 'settings.view', name: '系统设置', type: 'page', routeKey: 'settings', icon: 'settings', sortOrder: 90, enabled: true, children: [] },
   { id: 'help', code: 'help.view', name: '帮助中心', type: 'page', routeKey: 'help', icon: 'help', sortOrder: 100, enabled: true, children: [] },
 ];

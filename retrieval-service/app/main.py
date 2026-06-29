@@ -3,10 +3,11 @@ import json
 import math
 import random
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import httpx
 import psycopg
+from psycopg.rows import dict_row
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -64,7 +65,8 @@ def sync_job(job_id: int) -> Dict[str, Any]:
 
 def _search(request: RetrievalRequest, include_debug: bool) -> RetrievalResponse:
     trace_id = uuid.uuid4().hex
-    query_embedding = embed_text(request.query)
+    query_embedding_result = embed_text_with_metadata(request.query)
+    query_embedding = query_embedding_result["values"]
     candidates = load_candidates(request, query_embedding, request.policy.topK * 3)
     keyword_ranked = score_keywords(request.query, candidates)
     reranked = rerank(request.query, keyword_ranked, request.policy.rerankTopN)
@@ -99,7 +101,9 @@ def _search(request: RetrievalRequest, include_debug: bool) -> RetrievalResponse
             "candidateCount": len(candidates),
             "rerankedCount": len(reranked),
             "permissionChecks": permission_checks,
-            "queryEmbeddingProvider": "dashscope" if settings.dashscope_api_key else "local-hash",
+            "queryEmbeddingProvider": query_embedding_result["provider"],
+            "queryEmbeddingModel": query_embedding_result["model"],
+            "queryEmbeddingFallbackUsed": query_embedding_result["fallbackUsed"],
         }
     return RetrievalResponse(results=results, traceId=trace_id, debug=debug_payload)
 
@@ -214,16 +218,23 @@ def sync_wiki_page(cursor: Any, job: Dict[str, Any]) -> Dict[str, Any]:
     tags_payload = parse_json(page.get("tags_json"))
     position_tags = normalize_tag_list(tags_payload.get("positions") if isinstance(tags_payload, dict) else "")
     department_tags = str(page["department_id"]) if page.get("department_id") is not None else ""
-    embedding_model = settings.dashscope_embedding_model
-    embedding_version = "dashscope" if settings.dashscope_api_key else "local-hash-v1"
+    embedding_profile = get_ai_profile("rag_embedding")
+    embedding_model = embedding_profile.get("model_name") or settings.dashscope_embedding_model
+    embedding_version = embedding_version_for_profile(embedding_profile)
     index_version = int(job["id"])
     inserted_ids: List[int] = []
     for index, chunk_text in enumerate(chunks, start=1):
-        embedding = vector_literal(embed_text(chunk_text))
+        embedding_result = embed_text_with_metadata(chunk_text, embedding_profile)
+        embedding = vector_literal(embedding_result["values"])
+        embedding_model = embedding_result["model"]
+        embedding_version = embedding_result["version"]
         metadata = {
             "sourceTitle": page.get("title"),
             "chunkOrdinal": index,
             "syncJobId": job["id"],
+            "embeddingRealCall": embedding_result["realCall"],
+            "embeddingFallbackUsed": embedding_result["fallbackUsed"],
+            "embeddingFallbackReason": embedding_result.get("fallbackReason"),
         }
         cursor.execute(
             """
@@ -316,8 +327,9 @@ def sync_document(cursor: Any, job: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     department_tags = str(document["department_id"]) if document.get("department_id") is not None else ""
-    embedding_model = settings.dashscope_embedding_model
-    embedding_version = "dashscope" if settings.dashscope_api_key else "local-hash-v1"
+    embedding_profile = get_ai_profile("rag_embedding")
+    embedding_model = embedding_profile.get("model_name") or settings.dashscope_embedding_model
+    embedding_version = embedding_version_for_profile(embedding_profile)
     index_version = int(job["id"])
     inserted_ids: List[int] = []
     for index, chunk_text in enumerate(chunks, start=1):
@@ -327,6 +339,12 @@ def sync_document(cursor: Any, job: Dict[str, Any]) -> Dict[str, Any]:
             "syncJobId": job["id"],
             "source": "document",
         }
+        embedding_result = embed_text_with_metadata(chunk_text, embedding_profile)
+        metadata["embeddingRealCall"] = embedding_result["realCall"]
+        metadata["embeddingFallbackUsed"] = embedding_result["fallbackUsed"]
+        metadata["embeddingFallbackReason"] = embedding_result.get("fallbackReason")
+        embedding_model = embedding_result["model"]
+        embedding_version = embedding_result["version"]
         cursor.execute(
             """
             INSERT INTO ks_chunk(source_type, source_id, source_version, wiki_page_id, wiki_page_version,
@@ -347,7 +365,7 @@ def sync_document(cursor: Any, job: Dict[str, Any]) -> Dict[str, Any]:
                 department_tags,
                 embedding_model,
                 embedding_version,
-                vector_literal(embed_text(chunk_text)),
+                vector_literal(embedding_result["values"]),
                 index_version,
             ),
         )
@@ -412,27 +430,114 @@ def score_keywords(query: str, candidates: List[Dict[str, Any]]) -> List[Dict[st
     return sorted(candidates, key=lambda item: item.get("score", 0.0), reverse=True)
 
 
+def get_ai_profile(purpose: str) -> Dict[str, Any]:
+    try:
+        with psycopg.connect(settings.postgres_dsn) as conn:
+            with conn.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, profile_code, profile_name, provider, purpose, endpoint, api_key, model_name,
+                           dimensions, timeout_seconds, enabled, default_profile, fallback_enabled, config_json
+                    FROM sys_ai_model_profile
+                    WHERE purpose = %s AND enabled = 1
+                    ORDER BY default_profile DESC, id ASC
+                    LIMIT 1
+                    """,
+                    (purpose,),
+                )
+                row = cursor.fetchone()
+                if row:
+                    return dict(row)
+    except Exception:
+        pass
+    if purpose == "rag_embedding":
+        return {
+            "profile_code": "env_dashscope_embedding",
+            "provider": "openai_compatible",
+            "purpose": purpose,
+            "endpoint": f"{settings.dashscope_base_url.rstrip('/')}/embeddings",
+            "api_key": settings.dashscope_api_key,
+            "model_name": settings.dashscope_embedding_model,
+            "dimensions": settings.dashscope_embedding_dimensions,
+            "timeout_seconds": 20,
+            "fallback_enabled": 1,
+        }
+    if purpose == "rag_rerank":
+        return {
+            "profile_code": "env_dashscope_rerank",
+            "provider": "dashscope_rerank",
+            "purpose": purpose,
+            "endpoint": settings.dashscope_rerank_endpoint,
+            "api_key": settings.dashscope_api_key,
+            "model_name": settings.dashscope_rerank_model,
+            "timeout_seconds": 20,
+            "fallback_enabled": 1,
+        }
+    return {}
+
+
+def embedding_version_for_profile(profile: Dict[str, Any]) -> str:
+    if not profile.get("api_key"):
+        return "fallback-local-hash-v1"
+    return f"{profile.get('provider') or 'provider'}:{profile.get('profile_code') or profile.get('model_name')}"
+
+
 def embed_text(text: str) -> List[float]:
-    if settings.dashscope_api_key:
+    return embed_text_with_metadata(text)["values"]
+
+
+def embed_text_with_metadata(text: str, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    active_profile = profile or get_ai_profile("rag_embedding")
+    dimensions = int(active_profile.get("dimensions") or settings.dashscope_embedding_dimensions)
+    api_key = active_profile.get("api_key") or ""
+    endpoint = active_profile.get("endpoint") or f"{settings.dashscope_base_url.rstrip('/')}/embeddings"
+    model = active_profile.get("model_name") or settings.dashscope_embedding_model
+    provider = active_profile.get("provider") or "local-hash"
+    if api_key:
         try:
-            with httpx.Client(timeout=20) as client:
+            with httpx.Client(timeout=int(active_profile.get("timeout_seconds") or 20)) as client:
                 response = client.post(
-                    f"{settings.dashscope_base_url.rstrip('/')}/embeddings",
-                    headers={"Authorization": f"Bearer {settings.dashscope_api_key}"},
+                    endpoint,
+                    headers={"Authorization": f"Bearer {api_key}"},
                     json={
-                        "model": settings.dashscope_embedding_model,
+                        "model": model,
                         "input": text,
-                        "dimensions": settings.dashscope_embedding_dimensions,
+                        "dimensions": dimensions,
                     },
                 )
                 response.raise_for_status()
                 data = response.json()
                 embedding = data["data"][0]["embedding"]
-                if len(embedding) == settings.dashscope_embedding_dimensions:
-                    return [float(value) for value in embedding]
-        except Exception:
-            pass
-    return local_embedding(text, settings.dashscope_embedding_dimensions)
+                if len(embedding) == dimensions:
+                    return {
+                        "values": [float(value) for value in embedding],
+                        "provider": provider,
+                        "model": model,
+                        "version": embedding_version_for_profile(active_profile),
+                        "realCall": True,
+                        "fallbackUsed": False,
+                    }
+        except Exception as exc:
+            if not truthy(active_profile.get("fallback_enabled", 1)):
+                raise
+            return {
+                "values": local_embedding(text, dimensions),
+                "provider": "local-hash",
+                "model": model,
+                "version": "fallback-local-hash-v1",
+                "realCall": False,
+                "fallbackUsed": True,
+                "fallbackReason": str(exc),
+            }
+    return {
+        "values": local_embedding(text, dimensions),
+        "provider": "local-hash",
+        "model": model,
+        "version": "fallback-local-hash-v1",
+        "realCall": False,
+        "fallbackUsed": True,
+        "fallbackReason": "api_key_not_configured",
+    }
 
 
 def local_embedding(text: str, dimensions: int) -> List[float]:
@@ -511,14 +616,16 @@ def summarize_chunk(text: str) -> str:
 
 
 def rerank(query: str, candidates: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
-    if settings.dashscope_api_key and candidates:
+    profile = get_ai_profile("rag_rerank")
+    api_key = profile.get("api_key") or ""
+    if api_key and candidates:
         try:
             documents = [item["chunk_text"] for item in candidates[:limit]]
-            with httpx.Client(timeout=20) as client:
+            with httpx.Client(timeout=int(profile.get("timeout_seconds") or 20)) as client:
                 response = client.post(
-                    settings.dashscope_rerank_endpoint,
-                    headers={"Authorization": f"Bearer {settings.dashscope_api_key}"},
-                    json={"model": settings.dashscope_rerank_model, "query": query, "documents": documents, "top_n": limit},
+                    profile.get("endpoint") or settings.dashscope_rerank_endpoint,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json={"model": profile.get("model_name") or settings.dashscope_rerank_model, "query": query, "documents": documents, "top_n": limit},
                 )
                 response.raise_for_status()
                 data = response.json()
@@ -532,11 +639,20 @@ def rerank(query: str, candidates: List[Dict[str, Any]], limit: int) -> List[Dic
                 if ranked:
                     return ranked
         except Exception:
-            pass
+            if not truthy(profile.get("fallback_enabled", 1)):
+                raise
     ranked = candidates[:limit]
     for index, item in enumerate(ranked):
         item["rerank_score"] = float(item.get("score", 0.0)) - index * 0.001
     return ranked
+
+
+def truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).lower() not in {"", "0", "false", "none"}
 
 
 def check_permission(chunk_id: Any, request: RetrievalRequest) -> Dict[str, Any]:

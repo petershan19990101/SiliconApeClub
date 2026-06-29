@@ -27,4 +27,9 @@ public class OrganizationHumanCenterController {
     public ApiResponse<Map<String, Object>> replaceCustomerVisibility(@PathVariable Long id, @RequestBody Map<String, Object> request) {
         return ApiResponse.success(organizationHumanCenterService.replaceCustomerVisibility(id, request));
     }
+
+    @PutMapping("/customer-roles/{id}/visibility")
+    public ApiResponse<Map<String, Object>> replaceCustomerRoleVisibility(@PathVariable Long id, @RequestBody Map<String, Object> request) {
+        return ApiResponse.success(organizationHumanCenterService.replaceCustomerRoleVisibility(id, request));
+    }
 }

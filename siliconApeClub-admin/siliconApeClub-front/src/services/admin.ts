@@ -1,4 +1,6 @@
 import {
+  AiModelProfile,
+  AiModelProfileTestResult,
   AdminDepartment,
   AdminRole,
   AdminUser,
@@ -98,6 +100,37 @@ type ApiParseEngineBindingAdmin = {
   defaultBinding: boolean;
   enabled: boolean;
   sortOrder: number;
+};
+
+type ApiAiModelProfile = {
+  id: number;
+  profileCode: string;
+  profileName: string;
+  provider: string;
+  purpose: string;
+  endpoint: string;
+  apiKeyConfigured: boolean;
+  apiKeyMasked?: string | null;
+  modelName: string;
+  dimensions?: number | null;
+  timeoutSeconds: number;
+  enabled: boolean;
+  defaultProfile: boolean;
+  fallbackEnabled: boolean;
+  configJson?: string | null;
+  updatedAt?: string | null;
+};
+
+type ApiAiModelProfileTestResult = {
+  status: string;
+  provider: string;
+  purpose: string;
+  modelName: string;
+  realCall: boolean;
+  fallbackUsed: boolean;
+  message: string;
+  embeddingDimensions?: number | null;
+  sample?: string | null;
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -218,6 +251,41 @@ function normalizeParseEngineBinding(binding: ApiParseEngineBindingAdmin): Parse
     isDefault: binding.defaultBinding,
     enabled: binding.enabled,
     sortOrder: binding.sortOrder,
+  };
+}
+
+function normalizeAiModelProfile(profile: ApiAiModelProfile): AiModelProfile {
+  return {
+    id: String(profile.id),
+    profileCode: profile.profileCode,
+    profileName: profile.profileName,
+    provider: profile.provider,
+    purpose: profile.purpose,
+    endpoint: profile.endpoint,
+    apiKeyConfigured: profile.apiKeyConfigured,
+    apiKeyMasked: profile.apiKeyMasked ?? undefined,
+    modelName: profile.modelName,
+    dimensions: profile.dimensions ?? undefined,
+    timeoutSeconds: profile.timeoutSeconds,
+    enabled: profile.enabled,
+    defaultProfile: profile.defaultProfile,
+    fallbackEnabled: profile.fallbackEnabled,
+    configJson: profile.configJson ?? undefined,
+    updatedAt: profile.updatedAt ?? undefined,
+  };
+}
+
+function normalizeAiModelProfileTestResult(result: ApiAiModelProfileTestResult): AiModelProfileTestResult {
+  return {
+    status: result.status,
+    provider: result.provider,
+    purpose: result.purpose,
+    modelName: result.modelName,
+    realCall: result.realCall,
+    fallbackUsed: result.fallbackUsed,
+    message: result.message,
+    embeddingDimensions: result.embeddingDimensions ?? undefined,
+    sample: result.sample ?? undefined,
   };
 }
 
@@ -457,5 +525,35 @@ export const adminService = {
   },
   async deleteParseEngineBinding(id: string) {
     await request<void>(`/api/admin/parse-engine-bindings/${id}`, { method: 'DELETE' });
+  },
+  async listAiModelProfiles() {
+    const data = await request<ApiAiModelProfile[]>('/api/admin/ai-model-profiles');
+    return data.map(normalizeAiModelProfile);
+  },
+  async updateAiModelProfile(id: string, payload: {
+    profileName: string;
+    provider: string;
+    purpose: string;
+    endpoint: string;
+    apiKey?: string | null;
+    modelName: string;
+    dimensions?: number | null;
+    timeoutSeconds: number;
+    enabled: boolean;
+    defaultProfile: boolean;
+    fallbackEnabled: boolean;
+    configJson?: string;
+  }) {
+    const data = await request<ApiAiModelProfile>(`/api/admin/ai-model-profiles/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    return normalizeAiModelProfile(data);
+  },
+  async testAiModelProfile(id: string) {
+    const data = await request<ApiAiModelProfileTestResult>(`/api/admin/ai-model-profiles/${id}/test`, {
+      method: 'POST',
+    });
+    return normalizeAiModelProfileTestResult(data);
   },
 };

@@ -1,4 +1,4 @@
-import type { ConversationSession, DemandGroup, Employee, Principal, WorkerMessage, WorkerTask } from "./types";
+import type { Capability, ConversationSession, DemandGroup, Employee, FormBlockData, Principal, WorkerMessage, WorkerTask } from "./types";
 
 const TOKEN_KEY = "sac_worker_token";
 const API_BASE = "";
@@ -46,8 +46,17 @@ export const api = {
   async me(): Promise<{ principal: Principal }> {
     return request("/api/worker-platform/auth/me");
   },
-  async bootstrap(): Promise<{ principal: Principal; canViewOrg: boolean }> {
+  async bootstrap(): Promise<{ principal: Principal; canViewOrg: boolean; capabilities: Capability[] }> {
     return request("/api/worker-platform/bootstrap");
+  },
+  async capabilities(): Promise<Capability[]> {
+    return request("/api/worker-platform/quick-capabilities");
+  },
+  async openCapability(sessionId: string, capabilityCode: string): Promise<{ assistantMessage: WorkerMessage; capability: Capability }> {
+    return request(`/api/worker-platform/sessions/${sessionId}/quick-capabilities/${capabilityCode}/open`, {
+      method: "POST",
+      body: "{}"
+    });
   },
   async demandGroups(): Promise<DemandGroup[]> {
     return request("/api/worker-platform/demand-groups");
@@ -73,16 +82,20 @@ export const api = {
       body: JSON.stringify({ text })
     });
   },
-  async postForm(sessionId: string, title: string, values: Record<string, string>): Promise<{ userMessage: WorkerMessage; assistantMessage: WorkerMessage; task?: WorkerTask }> {
+  async postForm(sessionId: string, title: string, data: FormBlockData, values: Record<string, string>): Promise<{ userMessage: WorkerMessage; assistantMessage: WorkerMessage; task?: WorkerTask }> {
     return request(`/api/worker-platform/sessions/${sessionId}/messages`, {
       method: "POST",
       body: JSON.stringify({
         blocks: [
           {
-            type: "markdown",
-            content: `### ${title}\n\n${Object.entries(values)
-              .map(([key, value]) => `- **${key}**: ${value || "未填写"}`)
-              .join("\n")}`
+            type: "form",
+            title,
+            data: {
+              ...data,
+              submitted: true,
+              readOnly: true,
+              values
+            }
           }
         ]
       })

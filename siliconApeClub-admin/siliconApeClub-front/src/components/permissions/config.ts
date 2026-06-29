@@ -18,6 +18,7 @@ export const ROUTE_KEY_OPTIONS = [
   { value: 'settings_document_policy', label: '系统设置 / 文档策略' },
   { value: 'settings_integration_switches', label: '系统设置 / 集成开关' },
   { value: 'settings_platform_info', label: '系统设置 / 平台信息' },
+  { value: 'quick_capabilities', label: '系统快捷能力' },
   { value: 'help', label: '帮助中心' },
 ] as const;
 
@@ -30,4 +31,5 @@ export const ICON_OPTIONS = [
   { value: 'help', label: 'Help' },
   { value: 'menu', label: 'Menu' },
   { value: 'users', label: 'Users' },
+  { value: 'zap', label: 'Zap' },
 ] as const;

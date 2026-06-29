@@ -6,12 +6,14 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .db import get_connection
 from .models import (
+    CapabilityProposalCreate,
     DemandGroupCreate,
     EmployeeActionRequest,
     HandoffRequest,
@@ -92,6 +94,7 @@ def logout() -> Dict[str, str]:
 @app.get("/api/worker-platform/bootstrap")
 def bootstrap(principal: Dict[str, Any] = Depends(require_principal)) -> Dict[str, Any]:
     with get_connection() as conn:
+        sync_management_projection(conn)
         frontdesk = get_frontdesk_employee(conn)
         return {
             "principal": public_principal(principal),
@@ -100,8 +103,44 @@ def bootstrap(principal: Dict[str, Any] = Depends(require_principal)) -> Dict[st
                 "clientEntry": "/api/worker-platform/**",
                 "internalOnly": ["knowledge-runtime-service", "task-memory-service", "retrieval-service", "siliconApeClub-server"],
             },
-            "blockTypes": ["markdown", "html", "form", "artifact", "task_status", "org_route", "employee_card", "handoff"],
+            "blockTypes": ["markdown", "html", "code", "image", "form", "artifact", "task_status", "org_route", "employee_card", "handoff"],
+            "capabilities": visible_capabilities(conn, principal),
             "canViewOrg": can_view_org(principal),
+        }
+
+
+@app.get("/api/worker-platform/quick-capabilities")
+@app.get("/api/worker-platform/capabilities")
+def list_capabilities(principal: Dict[str, Any] = Depends(require_principal)) -> List[Dict[str, Any]]:
+    with get_connection() as conn:
+        sync_management_projection(conn)
+        return visible_capabilities(conn, principal)
+
+
+@app.post("/api/worker-platform/sessions/{session_id}/quick-capabilities/{capability_code}/open")
+@app.post("/api/worker-platform/sessions/{session_id}/capabilities/{capability_code}/open")
+def open_capability_form(
+    session_id: str,
+    capability_code: str,
+    principal: Dict[str, Any] = Depends(require_principal),
+) -> Dict[str, Any]:
+    with get_connection() as conn:
+        session = get_visible_session(conn, principal, session_id)
+        capability = get_visible_capability(conn, principal, capability_code)
+        employee = fetch_one(conn, "SELECT * FROM wp_ai_employee WHERE id = %s", (session["primary_employee_id"],))
+        message_id = insert_message(
+            conn,
+            session["demand_group_id"],
+            session["id"],
+            "ai_employee",
+            employee["id"],
+            employee["name"],
+            build_capability_prompt_blocks(capability, "用户从客户端快捷能力入口选择。"),
+        )
+        conn.commit()
+        return {
+            "assistantMessage": message_payload(fetch_one(conn, "SELECT * FROM wp_message WHERE id = %s", (message_id,))),
+            "capability": capability,
         }
 
 
@@ -198,7 +237,7 @@ def create_session(
             conn,
             group_id,
             principal["id"],
-            request.title or "新的需求沟通",
+            request.title or "新的服务对话",
             request.mode,
             primary_employee_id,
         )
@@ -238,8 +277,12 @@ def post_message(
             principal["display_name"],
             [block.model_dump() for block in user_blocks],
         )
-        text = request.text or summarize_blocks(user_blocks)
-        assistant = create_assistant_response(conn, principal, group, session, text)
+        form_submission = extract_form_submission(user_blocks)
+        if form_submission:
+            assistant = handle_form_submission(conn, principal, group, session, form_submission)
+        else:
+            text = request.text or summarize_blocks(user_blocks)
+            assistant = create_assistant_response(conn, principal, group, session, text)
         execute(
             conn,
             "UPDATE wp_demand_group SET updated_at = CURRENT_TIMESTAMP, status = CASE WHEN status = 'open' THEN 'in_progress' ELSE status END WHERE id = %s",
@@ -630,6 +673,81 @@ def create_skill_proposal(
         return normalize(row)
 
 
+@app.post("/api/worker-platform/capabilities/proposals")
+def create_capability_proposal(
+    request: CapabilityProposalCreate,
+    principal: Dict[str, Any] = Depends(require_principal),
+) -> Dict[str, Any]:
+    if not can_view_org(principal):
+        raise HTTPException(status_code=403, detail="External customers cannot propose business capabilities")
+    with get_connection() as conn:
+        if not table_exists(conn, "hr_skill_repository"):
+            raise HTTPException(status_code=503, detail="Skill repository is not initialized")
+        if request.taskId:
+            task = get_visible_task(conn, principal, request.taskId)
+        else:
+            task = None
+        if request.demandGroupId:
+            ensure_group_visible(conn, principal, request.demandGroupId)
+        source_employee_id = request.sourceEmployeeId or (task.get("assigned_employee_id") if task else None)
+        if source_employee_id:
+            employee_detail(source_employee_id, principal)
+        admin_employee_id_value = admin_source_numeric_id(source_employee_id, "employee-admin-")
+        department_id = request.departmentId
+        if department_id is None and source_employee_id:
+            employee = fetch_one(conn, "SELECT org_unit_id FROM wp_ai_employee WHERE id = %s", (source_employee_id,))
+            department_id = admin_source_numeric_id(employee.get("org_unit_id") if employee else None, "org-admin-")
+        orchestration = parse_json(request.orchestrationConfigJson) or {}
+        orchestration.setdefault("defaultVisible", True)
+        orchestration.setdefault("deterministic", True)
+        guardrails = parse_json(request.guardrailsJson) or {}
+        guardrails.setdefault("externalVisible", True)
+        guardrails.setdefault("humanReviewRequired", True)
+        execute(
+            conn,
+            """
+            INSERT INTO hr_skill_repository(code, name, description, department_id, skill_type, skill_level, invocation_mode,
+                input_schema_json, output_schema_json, orchestration_config_json, guardrails_json,
+                source_type, source_employee_id, review_status, enabled, created_by)
+            VALUES (%s, %s, %s, %s, 'business_action', 'basic', 'form_submit', %s, %s, %s, %s,
+                'ai_employee', %s, 'pending_review', 0, %s)
+            ON CONFLICT (code) DO UPDATE SET
+                name = EXCLUDED.name,
+                description = EXCLUDED.description,
+                department_id = EXCLUDED.department_id,
+                skill_type = 'business_action',
+                skill_level = 'basic',
+                invocation_mode = 'form_submit',
+                input_schema_json = EXCLUDED.input_schema_json,
+                output_schema_json = EXCLUDED.output_schema_json,
+                orchestration_config_json = EXCLUDED.orchestration_config_json,
+                guardrails_json = EXCLUDED.guardrails_json,
+                source_type = EXCLUDED.source_type,
+                source_employee_id = EXCLUDED.source_employee_id,
+                review_status = 'pending_review',
+                enabled = 0,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                request.code,
+                request.name,
+                request.description,
+                department_id,
+                request.inputSchemaJson,
+                request.outputSchemaJson,
+                json_dumps(orchestration),
+                json_dumps(guardrails),
+                admin_employee_id_value,
+                principal["principal_code"],
+            ),
+        )
+        if request.taskId:
+            insert_event(conn, request.taskId, "capability_proposal_created", principal["id"], source_employee_id, {"capabilityCode": request.code})
+        conn.commit()
+        row = fetch_one(conn, "SELECT * FROM hr_skill_repository WHERE code = %s", (request.code,))
+        return normalize(row)
+
+
 @app.post("/api/worker-platform/wiki-candidates")
 def create_wiki_candidate(
     request: WikiCandidateCreate,
@@ -778,6 +896,21 @@ def init_db() -> None:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS wp_form_submission (
+            id TEXT PRIMARY KEY,
+            demand_group_id TEXT NOT NULL REFERENCES wp_demand_group(id),
+            session_id TEXT NOT NULL REFERENCES wp_conversation_session(id),
+            capability_code TEXT NOT NULL,
+            capability_name TEXT NOT NULL,
+            submitted_by_principal_id TEXT REFERENCES wp_principal(id),
+            values_json TEXT NOT NULL,
+            task_id TEXT,
+            status TEXT NOT NULL DEFAULT 'submitted',
+            result_json TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS wp_task_run (
             id TEXT PRIMARY KEY,
             demand_group_id TEXT NOT NULL REFERENCES wp_demand_group(id),
@@ -884,6 +1017,7 @@ def init_db() -> None:
             execute(conn, statement)
         seed_data(conn)
         sync_management_projection(conn)
+        cleanup_legacy_client_concepts(conn)
         conn.commit()
 
 
@@ -902,7 +1036,7 @@ def seed_data(conn: Any) -> None:
     )
     units = [
         ("org-sac", "sac", "硅基猿猴俱乐部", "company", None, "AI 员工公司主体"),
-        ("org-frontdesk", "business-frontdesk", "业务前台", "department", "org-sac", "外部客户接待、需求澄清、组织派发"),
+        ("org-frontdesk", "business-frontdesk", "业务前台", "department", "org-sac", "外部客户接待、事项澄清、组织派发"),
         ("org-knowledge", "knowledge-ops", "知识运营部", "department", "org-sac", "Wiki、岗位知识和知识沉淀运营"),
         ("org-rag", "rag-support", "RAG 支持组", "team", "org-knowledge", "检索、索引、权限与召回质量支持"),
         ("org-delivery", "task-delivery", "任务交付组", "team", "org-sac", "通用任务执行和跨部门交付"),
@@ -925,8 +1059,8 @@ def seed_data(conn: Any) -> None:
             "业务前台人员",
             "org-frontdesk",
             "frontdesk",
-            "统一接待客户需求，澄清目标并按组织关系派发任务。",
-            ["需求接待", "结构化表单收集", "组织路由", "任务建账"],
+            "统一接待客户事项，澄清目标并按组织关系派发任务。",
+            ["事项接待", "结构化表单收集", "组织路由", "任务建账"],
         ),
         (
             "employee-knowledge-lin",
@@ -956,7 +1090,7 @@ def seed_data(conn: Any) -> None:
             "org-delivery",
             "task_executor",
             "负责通用业务任务执行和跨部门交付。",
-            ["需求拆解", "长任务执行", "交付物整理"],
+            ["事项拆解", "长任务执行", "交付物整理"],
         ),
     ]
     for employee in employees:
@@ -1012,9 +1146,9 @@ def seed_skills(conn: Any) -> None:
         (
             "skill-intake-form",
             "intake_form",
-            "结构化需求收集",
+            "结构化事项收集",
             "frontdesk",
-            "把自然语言需求转成可确认的表单字段。",
+            "把自然语言描述转成可确认的表单字段。",
             {"fields": ["目标", "背景", "截止时间", "优先级", "附件"]},
             {"blocks": ["form", "markdown", "task_status"]},
             {"requiresHumanConfirmation": True},
@@ -1026,7 +1160,7 @@ def seed_skills(conn: Any) -> None:
             "组织路由与派发",
             "orchestration",
             "根据组织关系、岗位能力和权限边界选择协作员工。",
-            {"fields": ["需求摘要", "业务域", "风险等级"]},
+            {"fields": ["事项摘要", "业务域", "风险等级"]},
             {"blocks": ["org_route", "employee_card", "task_status"]},
             {"externalCustomerVisible": True},
             ["employee-frontdesk-ada"],
@@ -1063,6 +1197,131 @@ def seed_skills(conn: Any) -> None:
             {"blocks": ["task_status", "markdown"]},
             {"idempotencyRequired": True},
             ["employee-delivery-mo", "employee-frontdesk-ada"],
+        ),
+        (
+            "skill-business-order-create",
+            "business_order_create",
+            "业务下单",
+            "business_action",
+            "收集商品、数量、联系人和收货地址，直接创建演示订单。",
+            {
+                "title": "业务下单",
+                "required": ["productName", "quantity", "deliveryAddress", "contactPhone"],
+                "properties": {
+                    "productName": {"type": "string", "title": "商品/服务名称", "placeholder": "例如：企业知识库初始化服务"},
+                    "quantity": {"type": "number", "title": "数量", "default": 1},
+                    "deliveryAddress": {"type": "string", "title": "收货/服务地址", "ui:widget": "textarea"},
+                    "contactPhone": {"type": "string", "title": "联系电话"},
+                    "remark": {"type": "string", "title": "备注", "ui:widget": "textarea"},
+                },
+            },
+            {"type": "object", "properties": {"orderId": {"type": "string"}, "status": {"type": "string"}}},
+            {
+                "externalVisible": True,
+                "orchestration": {
+                    "actionCode": "create_order",
+                    "formTitle": "业务下单",
+                    "submitLabel": "提交订单",
+                    "defaultVisible": True,
+                    "deterministic": True,
+                    "keywords": ["下单", "订购", "购买", "order"],
+                    "routeEmployeeCodes": ["frontdesk-ada", "customer-service-01"],
+                    "displayHtml": "<section><h3>业务下单</h3><p>请填写精确入参，提交后直接创建订单账本。</p></section>",
+                },
+            },
+            ["employee-frontdesk-ada"],
+        ),
+        (
+            "skill-business-order-query",
+            "business_order_query",
+            "查询订单进度",
+            "business_action",
+            "通过订单号和联系方式查询当前订单处理进度。",
+            {
+                "title": "查询订单进度",
+                "required": ["orderId"],
+                "properties": {
+                    "orderId": {"type": "string", "title": "订单号"},
+                    "contactPhone": {"type": "string", "title": "联系电话"},
+                },
+            },
+            {"type": "object", "properties": {"orderId": {"type": "string"}, "status": {"type": "string"}}},
+            {
+                "externalVisible": True,
+                "orchestration": {
+                    "actionCode": "query_order_status",
+                    "formTitle": "查询订单进度",
+                    "submitLabel": "查询进度",
+                    "defaultVisible": True,
+                    "deterministic": True,
+                    "keywords": ["订单进度", "查订单", "查询订单", "进度", "order status"],
+                    "routeEmployeeCodes": ["frontdesk-ada", "customer-service-01"],
+                    "displayHtml": "<section><h3>查询订单进度</h3><p>输入订单号即可查询，不需要再次走大模型。</p></section>",
+                },
+            },
+            ["employee-frontdesk-ada"],
+        ),
+        (
+            "skill-business-return-request",
+            "business_return_request",
+            "退货申请",
+            "business_action",
+            "收集订单号、退货原因和取件信息，登记退货申请。",
+            {
+                "title": "退货申请",
+                "required": ["orderId", "reason", "pickupAddress"],
+                "properties": {
+                    "orderId": {"type": "string", "title": "订单号"},
+                    "reason": {"type": "string", "title": "退货原因", "ui:widget": "textarea"},
+                    "pickupAddress": {"type": "string", "title": "取件地址", "ui:widget": "textarea"},
+                    "contactPhone": {"type": "string", "title": "联系电话"},
+                },
+            },
+            {"type": "object", "properties": {"returnRequestId": {"type": "string"}, "status": {"type": "string"}}},
+            {
+                "externalVisible": True,
+                "orchestration": {
+                    "actionCode": "return_request",
+                    "formTitle": "退货申请",
+                    "submitLabel": "提交退货申请",
+                    "defaultVisible": True,
+                    "deterministic": True,
+                    "keywords": ["退货", "退款", "售后", "return"],
+                    "routeEmployeeCodes": ["frontdesk-ada", "customer-service-01"],
+                    "displayHtml": "<section><h3>退货申请</h3><p>请提供订单号、原因和取件地址，客服 AI 员工会跟进审核。</p></section>",
+                },
+            },
+            ["employee-frontdesk-ada"],
+        ),
+        (
+            "skill-business-address-query",
+            "business_address_query",
+            "查询服务地址",
+            "business_action",
+            "根据城市或区域查询可服务地址。",
+            {
+                "title": "查询服务地址",
+                "required": ["region"],
+                "properties": {
+                    "region": {"type": "string", "title": "城市/区域"},
+                    "serviceType": {"type": "string", "title": "服务类型", "enum": ["售前咨询", "订单履约", "售后服务"]},
+                },
+            },
+            {"type": "object", "properties": {"addresses": {"type": "array"}}},
+            {
+                "externalVisible": True,
+                "orchestration": {
+                    "actionCode": "query_service_address",
+                    "formTitle": "查询服务地址",
+                    "submitLabel": "查询地址",
+                    "defaultVisible": True,
+                    "deterministic": True,
+                    "keywords": ["地址", "网点", "服务地址", "查询地址", "address"],
+                    "routeEmployeeCodes": ["frontdesk-ada", "customer-service-01"],
+                    "displayHtml": "<section><h3>查询服务地址</h3><p>填写区域后直接查询可服务地址。</p></section>",
+                },
+            },
+            ["employee-frontdesk-ada"],
         ),
     ]
     for skill in skills:
@@ -1250,16 +1509,19 @@ def sync_management_skills(conn: Any, employee_by_admin_id: Dict[Any, str]) -> N
     skill_rows = fetch_all(
         conn,
         """
-        SELECT id, code, name, description, skill_type, input_schema_json, output_schema_json,
-               orchestration_config_json, guardrails_json, enabled
+        SELECT id, code, name, description, skill_type, skill_level, invocation_mode,
+               input_schema_json, output_schema_json, orchestration_config_json, guardrails_json, enabled
         FROM hr_skill_repository
         WHERE review_status = 'approved' AND COALESCE(enabled, 1) = 1
         ORDER BY id
         """,
     )
+    runtime_skill_id_by_admin_id: Dict[Any, str] = {}
     for row in skill_rows:
         guardrails = parse_json(row.get("guardrails_json")) or {}
         guardrails["orchestration"] = parse_json(row.get("orchestration_config_json")) or {}
+        guardrails["skillLevel"] = row.get("skill_level") or "basic"
+        guardrails["invocationMode"] = row.get("invocation_mode") or "tool_call"
         execute(
             conn,
             """
@@ -1285,6 +1547,9 @@ def sync_management_skills(conn: Any, employee_by_admin_id: Dict[Any, str]) -> N
                 json_dumps(guardrails),
             ),
         )
+        runtime_skill = fetch_one(conn, "SELECT id FROM wp_worker_skill WHERE code = %s", (row["code"],))
+        if runtime_skill:
+            runtime_skill_id_by_admin_id[row["id"]] = runtime_skill["id"]
 
     if skill_rows:
         placeholders = ", ".join(["%s"] * len(skill_rows))
@@ -1294,7 +1559,13 @@ def sync_management_skills(conn: Any, employee_by_admin_id: Dict[Any, str]) -> N
             tuple(row["code"] for row in skill_rows),
         )
 
-    execute(conn, "DELETE FROM wp_skill_binding WHERE skill_id LIKE 'skill-admin-%%'")
+    if runtime_skill_id_by_admin_id:
+        placeholders = ", ".join(["%s"] * len(runtime_skill_id_by_admin_id))
+        execute(
+            conn,
+            f"DELETE FROM wp_skill_binding WHERE skill_id IN ({placeholders})",
+            tuple(runtime_skill_id_by_admin_id.values()),
+        )
     binding_rows = fetch_all(
         conn,
         """
@@ -1307,7 +1578,8 @@ def sync_management_skills(conn: Any, employee_by_admin_id: Dict[Any, str]) -> N
     )
     for row in binding_rows:
         employee_id = employee_by_admin_id.get(row["ai_employee_id"])
-        if not employee_id:
+        runtime_skill_id = runtime_skill_id_by_admin_id.get(row["skill_id"])
+        if not employee_id or not runtime_skill_id:
             continue
         execute(
             conn,
@@ -1321,7 +1593,7 @@ def sync_management_skills(conn: Any, employee_by_admin_id: Dict[Any, str]) -> N
             (
                 new_id("bind"),
                 employee_id,
-                admin_skill_id(row["skill_id"]),
+                runtime_skill_id,
                 json_dumps({"source": "management_console", "required": bool(row.get("required")), "sortOrder": row.get("sort_order")}),
             ),
         )
@@ -1347,19 +1619,13 @@ def grant_internal_employee_permissions(conn: Any, employee_ids: List[str]) -> N
 
 
 def sync_customer_employee_permissions(conn: Any, employee_by_code: Dict[str, str]) -> None:
-    if not table_exists(conn, "customer_member") or not table_exists(conn, "customer_employee_visibility"):
+    if not table_exists(conn, "customer_member"):
         return
-    rows = fetch_all(
-        conn,
-        """
-        SELECT c.principal_code, e.code AS employee_code, v.can_consult, v.can_assign
-        FROM customer_employee_visibility v
-        JOIN customer_member c ON c.id = v.customer_id
-        JOIN ds_ai_employee e ON e.id = v.ai_employee_id
-        WHERE c.principal_code IS NOT NULL
-        """,
-    )
-    principal_codes = sorted({row["principal_code"] for row in rows if row.get("principal_code")})
+    principal_codes = [
+        row["principal_code"]
+        for row in fetch_all(conn, "SELECT principal_code FROM customer_member WHERE principal_code IS NOT NULL")
+        if row.get("principal_code")
+    ]
     for principal_code in principal_codes:
         principal = fetch_one(conn, "SELECT id FROM wp_principal WHERE principal_code = %s AND enabled = 1", (principal_code,))
         if not principal:
@@ -1369,6 +1635,31 @@ def sync_customer_employee_permissions(conn: Any, employee_by_code: Dict[str, st
             "DELETE FROM wp_employee_permission WHERE principal_id = %s AND permission IN ('consult_employee', 'assign_employee')",
             (principal["id"],),
         )
+
+    rows: List[Dict[str, Any]] = []
+    if table_exists(conn, "customer_employee_visibility"):
+        rows.extend(fetch_all(
+            conn,
+            """
+            SELECT c.principal_code, e.code AS employee_code, v.can_consult, v.can_assign
+            FROM customer_employee_visibility v
+            JOIN customer_member c ON c.id = v.customer_id
+            JOIN ds_ai_employee e ON e.id = v.ai_employee_id
+            WHERE c.principal_code IS NOT NULL
+            """,
+        ))
+    if table_exists(conn, "customer_role_employee_visibility") and table_exists(conn, "customer_role_binding"):
+        rows.extend(fetch_all(
+            conn,
+            """
+            SELECT c.principal_code, e.code AS employee_code, v.can_consult, v.can_assign
+            FROM customer_role_employee_visibility v
+            JOIN customer_role_binding b ON b.role_id = v.role_id
+            JOIN customer_member c ON c.id = b.customer_id
+            JOIN ds_ai_employee e ON e.id = v.ai_employee_id
+            WHERE c.principal_code IS NOT NULL
+            """,
+        ))
     for row in rows:
         principal = fetch_one(conn, "SELECT id FROM wp_principal WHERE principal_code = %s AND enabled = 1", (row["principal_code"],))
         employee_id = employee_by_code.get(row["employee_code"])
@@ -1436,6 +1727,487 @@ def admin_source_numeric_id(value: Optional[str], prefix: str) -> Optional[int]:
     return int(suffix) if suffix.isdigit() else None
 
 
+def visible_capabilities(conn: Any, principal: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if table_exists(conn, "client_quick_capability"):
+        rows = fetch_all(
+            conn,
+            """
+            SELECT c.*, g.group_code, g.group_name, g.group_sort
+            FROM client_quick_capability c
+            JOIN client_quick_capability_group g ON g.id = c.group_id
+            WHERE c.enabled = 1
+              AND g.enabled = 1
+            ORDER BY g.group_sort, c.sort_order, c.id
+            """,
+        )
+        capabilities = [quick_capability_payload(row) for row in rows]
+        if can_view_org(principal):
+            return [capability for capability in capabilities if capability.get("visibleToInternal", True)]
+        return [
+            capability
+            for capability in capabilities
+            if capability.get("visibleToExternal") and not capability.get("internalOnly")
+        ]
+
+    rows = fetch_all(
+        conn,
+        """
+        SELECT *
+        FROM wp_worker_skill
+        WHERE enabled = 1
+          AND skill_type IN ('business_action', 'form_template')
+        ORDER BY name
+        """,
+    )
+    capabilities = [capability_payload(row) for row in rows]
+    if can_view_org(principal):
+        return capabilities
+    return [
+        capability
+        for capability in capabilities
+        if capability.get("externalVisible") and not capability.get("internalOnly")
+    ]
+
+
+def get_visible_capability(conn: Any, principal: Dict[str, Any], capability_code: str) -> Dict[str, Any]:
+    if table_exists(conn, "client_quick_capability"):
+        row = fetch_one(
+            conn,
+            """
+            SELECT c.*, g.group_code, g.group_name, g.group_sort
+            FROM client_quick_capability c
+            JOIN client_quick_capability_group g ON g.id = c.group_id
+            WHERE c.enabled = 1
+              AND g.enabled = 1
+              AND c.capability_code = %s
+            """,
+            (capability_code,),
+        )
+        if row:
+            capability = quick_capability_payload(row)
+            if principal["principal_type"] == "external_customer" and (
+                not capability.get("visibleToExternal") or capability.get("internalOnly")
+            ):
+                raise HTTPException(status_code=403, detail="Capability is not visible to external customers")
+            if can_view_org(principal) and not capability.get("visibleToInternal", True):
+                raise HTTPException(status_code=403, detail="Capability is not visible to internal users")
+            return capability
+
+    row = fetch_one(
+        conn,
+        """
+        SELECT *
+        FROM wp_worker_skill
+        WHERE enabled = 1
+          AND skill_type IN ('business_action', 'form_template')
+          AND code = %s
+        """,
+        (capability_code,),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Capability not found")
+    capability = capability_payload(row)
+    if principal["principal_type"] == "external_customer" and (
+        not capability.get("externalVisible") or capability.get("internalOnly")
+    ):
+        raise HTTPException(status_code=403, detail="Capability is not visible to external customers")
+    return capability
+
+
+def quick_capability_payload(row: Dict[str, Any]) -> Dict[str, Any]:
+    input_schema = parse_json(row.get("input_schema_json")) or {}
+    fields = form_fields_from_schema(input_schema)
+    keywords = parse_json(row.get("keywords_json")) or []
+    payload = normalize(row)
+    payload["id"] = str(row.get("id"))
+    payload["code"] = row.get("capability_code")
+    payload["name"] = row.get("capability_name")
+    payload["skillType"] = "client_quick_capability"
+    payload["inputSchema"] = input_schema
+    payload["outputSchema"] = {}
+    payload["guardrails"] = {
+        "externalVisible": bool(row.get("visible_to_external")),
+        "internalOnly": bool(row.get("visible_to_internal") in (0, False)),
+    }
+    payload["orchestration"] = {
+        "actionCode": row.get("action_code"),
+        "formTitle": row.get("form_title") or input_schema.get("title") or row.get("capability_name"),
+        "submitLabel": row.get("submit_label") or input_schema.get("submitLabel") or "提交",
+        "defaultVisible": True,
+        "deterministic": True,
+        "keywords": keywords,
+        "displayHtml": row.get("display_html"),
+    }
+    payload["formTitle"] = payload["orchestration"]["formTitle"]
+    payload["submitLabel"] = payload["orchestration"]["submitLabel"]
+    payload["fields"] = fields
+    payload["displayHtml"] = row.get("display_html") or build_default_form_html(row.get("capability_name"), row.get("description"))
+    payload["defaultVisible"] = True
+    payload["keywords"] = keywords
+    payload["actionCode"] = row.get("action_code")
+    payload["transactionServiceCode"] = row.get("transaction_service_code")
+    payload["deterministic"] = True
+    payload["externalVisible"] = bool(row.get("visible_to_external"))
+    payload["visibleToExternal"] = bool(row.get("visible_to_external"))
+    payload["visibleToInternal"] = bool(row.get("visible_to_internal"))
+    payload["internalOnly"] = not bool(row.get("visible_to_external")) and bool(row.get("visible_to_internal"))
+    return payload
+
+
+def capability_payload(row: Dict[str, Any]) -> Dict[str, Any]:
+    input_schema = parse_json(row.get("input_schema")) or {}
+    output_schema = parse_json(row.get("output_schema")) or {}
+    guardrails = parse_json(row.get("guardrails")) or {}
+    orchestration = guardrails.get("orchestration") or {}
+    fields = form_fields_from_schema(input_schema)
+    title = orchestration.get("formTitle") or input_schema.get("title") or row["name"]
+    payload = normalize(row)
+    payload["inputSchema"] = input_schema
+    payload["outputSchema"] = output_schema
+    payload["guardrails"] = guardrails
+    payload["orchestration"] = orchestration
+    payload["formTitle"] = title
+    payload["submitLabel"] = orchestration.get("submitLabel") or input_schema.get("submitLabel") or "提交"
+    payload["fields"] = fields
+    payload["displayHtml"] = orchestration.get("displayHtml") or build_default_form_html(row["name"], row.get("description"))
+    payload["defaultVisible"] = bool(orchestration.get("defaultVisible", True))
+    payload["keywords"] = orchestration.get("keywords") or []
+    payload["actionCode"] = orchestration.get("actionCode") or row["code"]
+    payload["deterministic"] = bool(orchestration.get("deterministic", True))
+    payload["externalVisible"] = bool(guardrails.get("externalVisible", False))
+    payload["internalOnly"] = bool(guardrails.get("internalOnly", False))
+    return payload
+
+
+def form_fields_from_schema(schema: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if isinstance(schema.get("fields"), list):
+        return [normalize_form_field(field) for field in schema["fields"] if isinstance(field, dict)]
+    properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    required = set(schema.get("required") or [])
+    fields: List[Dict[str, Any]] = []
+    for name, raw in properties.items():
+        if not isinstance(raw, dict):
+            continue
+        field_type = str(raw.get("type") or "string")
+        widget = str(raw.get("ui:widget") or raw.get("widget") or "")
+        if raw.get("enum") or raw.get("options"):
+            control_type = "select"
+        elif widget in {"textarea", "multiline"} or field_type == "text":
+            control_type = "textarea"
+        elif field_type in {"integer", "number"}:
+            control_type = "number"
+        elif field_type == "boolean":
+            control_type = "select"
+        else:
+            control_type = str(raw.get("ui:type") or raw.get("controlType") or "text")
+        options = raw.get("enum") or raw.get("options")
+        if field_type == "boolean" and not options:
+            options = ["是", "否"]
+        fields.append(
+            normalize_form_field(
+                {
+                    "name": name,
+                    "label": raw.get("title") or raw.get("label") or name,
+                    "type": control_type,
+                    "required": name in required or bool(raw.get("required")),
+                    "defaultValue": raw.get("default"),
+                    "placeholder": raw.get("placeholder"),
+                    "helpText": raw.get("description"),
+                    "options": options,
+                }
+            )
+        )
+    return fields
+
+
+def normalize_form_field(field: Dict[str, Any]) -> Dict[str, Any]:
+    options = field.get("options")
+    if isinstance(options, list):
+        normalized_options = [
+            {"label": str(item.get("label")), "value": str(item.get("value"))}
+            if isinstance(item, dict)
+            else {"label": str(item), "value": str(item)}
+            for item in options
+        ]
+    else:
+        normalized_options = []
+    field_type = str(field.get("type") or "text")
+    if field_type not in {"text", "textarea", "select", "number", "date", "email", "tel"}:
+        field_type = "textarea" if field_type == "text_area" else "text"
+    return {
+        "name": str(field.get("name") or ""),
+        "label": str(field.get("label") or field.get("title") or field.get("name") or ""),
+        "type": field_type,
+        "required": bool(field.get("required", False)),
+        "defaultValue": "" if field.get("defaultValue") is None else str(field.get("defaultValue")),
+        "placeholder": field.get("placeholder"),
+        "helpText": field.get("helpText") or field.get("description"),
+        "options": normalized_options,
+    }
+
+
+def build_default_form_html(name: str, description: Optional[str]) -> str:
+    return (
+        "<section class=\"capability-intro\">"
+        f"<h3>{escape_html(name)}</h3>"
+        f"<p>{escape_html(description or '请填写下面的结构化表单，AI 员工会把控后续服务流程。')}</p>"
+        "</section>"
+    )
+
+
+def build_capability_prompt_blocks(capability: Dict[str, Any], user_text: str) -> List[Dict[str, Any]]:
+    content = (
+        f"我识别到你可能要办理 **{capability['name']}**。"
+        "这类事项需要精确入参，我先给你一张结构化表单，提交后会直接进入对应业务动作和任务账本。"
+    )
+    if user_text:
+        content += f"\n\n识别依据：{user_text}"
+    return [
+        {"type": "markdown", "content": content},
+        {
+            "type": "form",
+            "title": capability["formTitle"],
+            "data": {
+                "capabilityCode": capability["code"],
+                "capabilityName": capability["name"],
+                "transactionServiceCode": capability.get("transactionServiceCode"),
+                "actionCode": capability.get("actionCode"),
+                "submitLabel": capability["submitLabel"],
+                "htmlContent": capability.get("displayHtml"),
+                "description": capability.get("description"),
+                "deterministic": capability.get("deterministic", True),
+                "fields": capability.get("fields") or [],
+            },
+        },
+    ]
+
+
+def build_chat_guidance_blocks(conn: Any, principal: Dict[str, Any], employee: Dict[str, Any]) -> List[Dict[str, Any]]:
+    capabilities = [cap for cap in visible_capabilities(conn, principal) if cap.get("defaultVisible")][:4]
+    names = "、".join(capability["name"] for capability in capabilities) or "下单、查进度、退货"
+    return [
+        {
+            "type": "markdown",
+            "content": (
+                f"我是 **{employee['name']}**，可以先陪你把事情聊清楚。\n\n"
+                f"如果你要办理确定性业务，可以直接选择右侧快捷能力，例如：{names}。"
+                "我也会在聊天中识别意图，并在需要精确入参时给出表单。"
+            ),
+        }
+    ]
+
+
+def match_capability(conn: Any, principal: Dict[str, Any], text: str) -> Optional[Dict[str, Any]]:
+    lower = (text or "").lower()
+    if not lower.strip():
+        return None
+    best: Optional[Dict[str, Any]] = None
+    best_score = 0
+    for capability in visible_capabilities(conn, principal):
+        keywords = capability.get("keywords") or []
+        candidates = [capability.get("code"), capability.get("name"), *(str(item) for item in keywords)]
+        score = sum(1 for item in candidates if item and str(item).lower() in lower)
+        if score > best_score:
+            best = capability
+            best_score = score
+    return best if best_score > 0 else None
+
+
+def is_small_talk(text: str) -> bool:
+    clean = (text or "").strip().lower()
+    if not clean:
+        return True
+    greetings = {"你好", "您好", "hi", "hello", "在吗", "嗨", "help", "帮助"}
+    return len(clean) <= 12 and any(item in clean for item in greetings)
+
+
+def extract_form_submission(blocks: List[MessageBlock]) -> Optional[Dict[str, Any]]:
+    for block in blocks:
+        if block.type != "form":
+            continue
+        data = block.data or {}
+        values = data.get("values")
+        capability_code = data.get("capabilityCode")
+        if capability_code and isinstance(values, dict):
+            return {
+                "title": block.title or data.get("capabilityName") or "结构化表单",
+                "capabilityCode": str(capability_code),
+                "values": values,
+                "fields": data.get("fields") if isinstance(data.get("fields"), list) else [],
+            }
+    return None
+
+
+def handle_form_submission(
+    conn: Any,
+    principal: Dict[str, Any],
+    group: Dict[str, Any],
+    session: Dict[str, Any],
+    submission: Dict[str, Any],
+) -> Dict[str, Any]:
+    capability = get_visible_capability(conn, principal, submission["capabilityCode"])
+    values = {key: value for key, value in submission["values"].items()}
+    route_employee = choose_capability_employee(conn, capability, values)
+    task = create_task_row(
+        conn,
+        group["id"],
+        session["id"],
+        capability["name"],
+        json_dumps(values),
+        principal["id"],
+        route_employee["id"] if route_employee else session.get("primary_employee_id"),
+        route_employee.get("org_unit_id") if route_employee else None,
+        status_value="running",
+    )
+    result = execute_business_action(capability, values, task["id"])
+    execute(
+        conn,
+        """
+        INSERT INTO wp_form_submission(id, demand_group_id, session_id, capability_code, capability_name,
+            submitted_by_principal_id, values_json, task_id, status, result_json)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'processed', %s)
+        """,
+        (
+            new_id("form"),
+            group["id"],
+            session["id"],
+            capability["code"],
+            capability["name"],
+            principal["id"],
+            json_dumps(values),
+            task["id"],
+            json_dumps(result),
+        ),
+    )
+    execute(
+        conn,
+        "UPDATE wp_task_run SET status = %s, progress = %s, checkpoint_json = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+        ("completed" if result.get("completed", True) else "running", 100 if result.get("completed", True) else 40, json_dumps(result), task["id"]),
+    )
+    insert_event(conn, task["id"], "form_submitted", principal["id"], route_employee["id"] if route_employee else None, {"capabilityCode": capability["code"], "values": values})
+    insert_event(conn, task["id"], "business_action_executed", principal["id"], route_employee["id"] if route_employee else None, result)
+    insert_checkpoint(conn, task["id"], "business_action_result", result)
+    task = fetch_one(conn, "SELECT * FROM wp_task_run WHERE id = %s", (task["id"],))
+    message_id = insert_message(
+        conn,
+        group["id"],
+        session["id"],
+        "ai_employee",
+        route_employee["id"] if route_employee else session["primary_employee_id"],
+        route_employee["name"] if route_employee else "业务前台 Ada",
+        build_form_result_blocks(capability, route_employee, task, result),
+    )
+    return {"message_id": message_id, "task": task}
+
+
+def choose_capability_employee(conn: Any, capability: Dict[str, Any], values: Dict[str, Any]) -> Dict[str, Any]:
+    route_codes = capability.get("orchestration", {}).get("routeEmployeeCodes") or []
+    if isinstance(route_codes, list):
+        employee = find_first_enabled_employee(conn, [str(code) for code in route_codes])
+        if employee:
+            return employee
+    return choose_route_employee(conn, json_dumps(values) + " " + capability.get("name", ""))
+
+
+def execute_business_action(capability: Dict[str, Any], values: Dict[str, Any], task_id: str) -> Dict[str, Any]:
+    action_code = capability.get("actionCode") or capability["code"]
+    transaction_service_code = capability.get("transactionServiceCode")
+    if action_code == "create_order":
+        order_id = f"SO-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{task_id[-6:].upper()}"
+        return {
+            "completed": True,
+            "actionCode": action_code,
+            "transactionServiceCode": transaction_service_code,
+            "orderId": order_id,
+            "status": "created",
+            "message": "订单已按结构化入参创建，客服 AI 员工会继续跟进履约。",
+            "echo": values,
+        }
+    if action_code == "query_order_status":
+        order_id = str(values.get("orderId") or values.get("order_id") or "未提供")
+        return {
+            "completed": True,
+            "actionCode": action_code,
+            "transactionServiceCode": transaction_service_code,
+            "orderId": order_id,
+            "status": "processing",
+            "message": "订单当前处于处理中，预计下一节点会由客户服务部继续同步。",
+            "echo": values,
+        }
+    if action_code == "return_request":
+        request_id = f"RT-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{task_id[-6:].upper()}"
+        return {
+            "completed": True,
+            "actionCode": action_code,
+            "transactionServiceCode": transaction_service_code,
+            "returnRequestId": request_id,
+            "status": "pending_review",
+            "message": "退货申请已登记，后续会进入客服审核。",
+            "echo": values,
+        }
+    if action_code == "query_service_address":
+        return {
+            "completed": True,
+            "actionCode": action_code,
+            "transactionServiceCode": transaction_service_code,
+            "status": "answered",
+            "message": "已根据区域查询服务地址，后续可由客服补充更精确信息。",
+            "addresses": [
+                {"name": "硅基猿猴俱乐部客户服务中心", "address": "线上服务台 / 当前演示环境"},
+            ],
+            "echo": values,
+        }
+    return {
+        "completed": True,
+        "actionCode": action_code,
+        "transactionServiceCode": transaction_service_code,
+        "status": "accepted",
+        "message": "表单已提交，AI 员工会按该能力配置继续处理。",
+        "echo": values,
+    }
+
+
+def build_form_result_blocks(
+    capability: Dict[str, Any],
+    employee: Optional[Dict[str, Any]],
+    task: Dict[str, Any],
+    result: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    facts = []
+    for key in ["orderId", "returnRequestId", "status"]:
+        if result.get(key):
+            facts.append(f"- **{key}**: {result[key]}")
+    return [
+        {
+            "type": "markdown",
+            "content": (
+                f"**{capability['name']}** 已按结构化表单处理完成。\n\n"
+                f"{result.get('message', '业务动作已执行。')}\n\n"
+                + ("\n".join(facts) if facts else "")
+            ),
+        },
+        {
+            "type": "task_status",
+            "title": "任务状态",
+            "data": {
+                "taskId": task["id"],
+                "status": task.get("status"),
+                "progress": task.get("progress"),
+                "checkpoint": result,
+            },
+        },
+        {
+            "type": "org_route",
+            "title": "服务把控员工",
+            "data": {
+                "from": {"name": "业务能力表单", "role": "deterministic_form"},
+                "to": {"id": employee.get("id") if employee else None, "name": employee.get("name") if employee else "业务前台 Ada", "role": employee.get("role_title") if employee else "业务前台"},
+                "reason": "该业务能力通过传统表单提交入参，AI 员工负责服务把控、异常升级和后续跟进。",
+            },
+        },
+    ]
+
+
 def create_assistant_response(
     conn: Any,
     principal: Dict[str, Any],
@@ -1444,6 +2216,29 @@ def create_assistant_response(
     text: str,
 ) -> Dict[str, Any]:
     current_employee = fetch_one(conn, "SELECT * FROM wp_ai_employee WHERE id = %s", (session["primary_employee_id"],))
+    matched_capability = match_capability(conn, principal, text)
+    if matched_capability:
+        message_id = insert_message(
+            conn,
+            group["id"],
+            session["id"],
+            "ai_employee",
+            current_employee["id"],
+            current_employee["name"],
+            build_capability_prompt_blocks(matched_capability, text),
+        )
+        return {"message_id": message_id, "task": None}
+    if is_small_talk(text):
+        message_id = insert_message(
+            conn,
+            group["id"],
+            session["id"],
+            "ai_employee",
+            current_employee["id"],
+            current_employee["name"],
+            build_chat_guidance_blocks(conn, principal, current_employee),
+        )
+        return {"message_id": message_id, "task": None}
     route_employee = current_employee
     route_reason = "当前会话由指定员工处理。"
     create_task = True
@@ -1461,7 +2256,8 @@ def create_assistant_response(
         route_employee.get("org_unit_id") if route_employee else current_employee.get("org_unit_id"),
         status_value="running",
     ) if create_task else None
-    blocks = build_assistant_blocks(current_employee, route_employee, route_reason, task, text)
+    analysis = analyze_employee_message(conn, principal, current_employee, route_employee, route_reason, text)
+    blocks = build_assistant_blocks(current_employee, route_employee, route_reason, task, text, analysis)
     message_id = insert_message(
         conn,
         group["id"],
@@ -1474,22 +2270,180 @@ def create_assistant_response(
     return {"message_id": message_id, "task": task}
 
 
+def analyze_employee_message(
+    conn: Any,
+    principal: Dict[str, Any],
+    current_employee: Dict[str, Any],
+    route_employee: Dict[str, Any],
+    route_reason: str,
+    text: str,
+) -> Dict[str, Any]:
+    profile = get_ai_model_profile(conn, "worker_chat")
+    metadata = ai_profile_metadata(profile, "worker_chat")
+    if not profile:
+        return fallback_worker_analysis(current_employee, route_reason, metadata, "profile_not_found")
+    if not profile.get("api_key"):
+        return fallback_worker_analysis(current_employee, route_reason, metadata, "api_key_not_configured")
+    try:
+        content = call_worker_chat_model(profile, principal, current_employee, route_employee, route_reason, text)
+        metadata["realCall"] = True
+        metadata["fallbackUsed"] = False
+        return {"content": content, "metadata": metadata}
+    except Exception as exc:
+        metadata["realCall"] = False
+        metadata["fallbackReason"] = str(exc)
+        if profile_truthy(profile.get("fallback_enabled", 1)):
+            return fallback_worker_analysis(current_employee, route_reason, metadata, str(exc))
+        metadata["fallbackUsed"] = False
+        return {
+            "content": (
+                "模型调用失败，当前未启用自动降级。我已保留任务账本，"
+                "请在管理台系统设置中检查 AI 模型配置后继续处理。"
+            ),
+            "metadata": metadata,
+        }
+
+
+def get_ai_model_profile(conn: Any, purpose: str) -> Dict[str, Any]:
+    try:
+        row = fetch_one(
+            conn,
+            """
+            SELECT id, profile_code, profile_name, provider, purpose, endpoint, api_key, model_name,
+                   dimensions, timeout_seconds, enabled, default_profile, fallback_enabled, config_json
+            FROM sys_ai_model_profile
+            WHERE purpose = %s AND enabled = 1
+            ORDER BY default_profile DESC, id ASC
+            LIMIT 1
+            """,
+            (purpose,),
+        )
+        return dict(row) if row else {}
+    except Exception:
+        return {}
+
+
+def call_worker_chat_model(
+    profile: Dict[str, Any],
+    principal: Dict[str, Any],
+    current_employee: Dict[str, Any],
+    route_employee: Dict[str, Any],
+    route_reason: str,
+    text: str,
+) -> str:
+    endpoint = profile.get("endpoint")
+    api_key = profile.get("api_key")
+    model_name = profile.get("model_name")
+    if not endpoint or not api_key or not model_name:
+        raise ValueError("model endpoint, api key or model name is missing")
+    config = parse_json(profile.get("config_json")) or {}
+    temperature = float(config.get("temperature", 0.2)) if isinstance(config, dict) else 0.2
+    max_tokens = int(config.get("maxTokens", 900)) if isinstance(config, dict) else 900
+    payload = {
+        "model": model_name,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "你是硅基猿猴俱乐部 AI 员工公司的数字员工。"
+                    "你必须用简洁的中文 Markdown 回复，先明确你已接收事项，"
+                    "再说明组织派发或协作路径、需要补充的结构化信息、下一步动作。"
+                    "不要编造已经完成的外部系统动作。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json_dumps(
+                    {
+                        "principal": {
+                            "displayName": principal.get("display_name"),
+                            "principalType": principal.get("principal_type"),
+                        },
+                        "currentEmployee": {
+                            "name": current_employee.get("name"),
+                            "roleTitle": current_employee.get("role_title"),
+                        },
+                        "routeEmployee": {
+                            "name": route_employee.get("name"),
+                            "roleTitle": route_employee.get("role_title"),
+                            "description": route_employee.get("description"),
+                        },
+                        "routeReason": route_reason,
+                        "customerMessage": text,
+                    }
+                ),
+            },
+        ],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    with httpx.Client(timeout=int(profile.get("timeout_seconds") or 30)) as client:
+        response = client.post(endpoint, headers={"Authorization": f"Bearer {api_key}"}, json=payload)
+        response.raise_for_status()
+        data = response.json()
+    content = data.get("choices", [{}])[0].get("message", {}).get("content")
+    if not content:
+        raise ValueError("model response does not contain choices[0].message.content")
+    return str(content).strip()
+
+
+def fallback_worker_analysis(
+    current_employee: Dict[str, Any],
+    route_reason: str,
+    metadata: Dict[str, Any],
+    reason: str,
+) -> Dict[str, Any]:
+    metadata["realCall"] = False
+    metadata["fallbackUsed"] = True
+    metadata["fallbackReason"] = reason
+    return {
+        "content": (
+            f"我已作为 **{current_employee['role_title']}** 接收这项事项，并为它建立任务账本。\n\n"
+            f"{route_reason}\n\n"
+            "下一步会先确认结构化信息，再由对应员工继续处理。"
+        ),
+        "metadata": metadata,
+    }
+
+
+def ai_profile_metadata(profile: Dict[str, Any], purpose: str) -> Dict[str, Any]:
+    return {
+        "purpose": purpose,
+        "profileCode": profile.get("profile_code"),
+        "provider": profile.get("provider"),
+        "modelName": profile.get("model_name"),
+        "realCall": False,
+        "fallbackUsed": False,
+    }
+
+
+def profile_truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
+
 def build_assistant_blocks(
     current_employee: Dict[str, Any],
     route_employee: Dict[str, Any],
     route_reason: str,
     task: Optional[Dict[str, Any]],
     text: str,
+    analysis: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
     task_id = task["id"] if task else None
     return [
         {
             "type": "markdown",
-            "content": (
-                f"我已作为 **{current_employee['role_title']}** 接收这项需求，并为它建立任务账本。\n\n"
-                f"{route_reason}\n\n"
-                "下一步会先确认结构化信息，再由对应员工继续处理。"
+            "content": analysis.get("content") or (
+                f"我已作为 **{current_employee['role_title']}** 接收这项事项，并为它建立任务账本。\n\n"
+                f"{route_reason}\n\n下一步会先确认结构化信息，再由对应员工继续处理。"
             ),
+            "data": analysis.get("metadata") or {},
         },
         {
             "type": "form",
@@ -1574,9 +2528,9 @@ def create_system_opening(
 ) -> None:
     employee = fetch_one(conn, "SELECT * FROM wp_ai_employee WHERE id = %s", (employee_id,))
     content = (
-        f"你好，{principal['display_name']}。我是 **{employee['name']}**，会直接处理这项需求。"
+        f"你好，{principal['display_name']}。我是 **{employee['name']}**，你可以直接描述要办理或咨询的事情。"
         if direct
-        else "你好，我是 **业务前台 Ada**。我会先接待和澄清需求，再按组织关系拆分给合适的团队。"
+        else "你好，我是 **业务前台 Ada**。你可以先直接聊天说明要办理或咨询的事情；如果需要精确入参，我会再给你对应表单。"
     )
     insert_message(
         conn,
@@ -1585,21 +2539,7 @@ def create_system_opening(
         "ai_employee",
         employee_id,
         employee["name"],
-        [
-            {"type": "markdown", "content": content},
-            {
-                "type": "form",
-                "title": "需求登记",
-                "data": {
-                    "submitLabel": "提交需求登记",
-                    "fields": [
-                        {"name": "businessGoal", "label": "业务目标", "type": "textarea", "required": True},
-                        {"name": "expectedOutput", "label": "期望输出", "type": "text", "required": True},
-                        {"name": "materials", "label": "已有材料说明", "type": "textarea", "required": False},
-                    ],
-                },
-            },
-        ],
+        [{"type": "markdown", "content": content}],
     )
 
 
@@ -1854,6 +2794,25 @@ def visible_org_units_for_principal(conn: Any, principal: Dict[str, Any]) -> Lis
             (principal["principal_code"],),
         )
         visible_ids.update(row["id"] for row in rows)
+    if (
+        table_exists(conn, "customer_member")
+        and table_exists(conn, "customer_role_binding")
+        and table_exists(conn, "customer_role_department_visibility")
+    ):
+        rows = fetch_all(
+            conn,
+            """
+            SELECT u.id
+            FROM customer_role_department_visibility v
+            JOIN customer_role_binding b ON b.role_id = v.role_id
+            JOIN customer_member c ON c.id = b.customer_id
+            JOIN ds_department d ON d.id = v.department_id
+            JOIN wp_org_unit u ON u.code = d.code
+            WHERE c.principal_code = %s
+            """,
+            (principal["principal_code"],),
+        )
+        visible_ids.update(row["id"] for row in rows)
     expanded_ids = set()
     for unit_id in visible_ids:
         current_id = unit_id
@@ -1926,18 +2885,18 @@ def find_first_enabled_employee(conn: Any, codes: List[str]) -> Optional[Dict[st
 def build_route_reason(employee: Dict[str, Any], text: str) -> str:
     code = employee.get("code")
     if code in {"strategy-chief", "strategy-researcher-01", "strategy-researcher-02"}:
-        return "需求包含战略、方向或研究信号，已路由给业务战略部。"
+        return "这件事包含战略、方向或研究信号，已路由给业务战略部。"
     if code in {"marketing-leader", "marketing-pm-01", "marketing-pm-02"}:
-        return "需求包含市场、营销或产品建设信号，已路由给市场部/产品经理。"
+        return "这段内容包含市场、营销或产品建设信号，已路由给市场部/产品经理。"
     if code in {"rd-leader", "public-rd-captain", "developer-01", "developer-02", "cto-luo"}:
-        return "需求包含技术建设、研发、架构或检索/RAG 信号，已路由给科技部研发中心。"
+        return "这段内容包含技术建设、研发、架构或检索/RAG 信号，已路由给科技部研发中心。"
     if code in {"customer-service-leader", "customer-service-01", "customer-service-02", "frontdesk-ada"}:
-        return "需求需要客户服务接待、澄清或跟进，已路由给客户服务部。"
+        return "这件事需要客户服务接待、澄清或跟进，已路由给客户服务部。"
     if employee["code"] == "rag-kai":
-        return "需求中包含检索、索引、RAG 或召回质量信号，已路由给 RAG 支持组。"
+        return "这段内容包含检索、索引、RAG 或召回质量信号，已路由给 RAG 支持组。"
     if employee["code"] == "knowledge-lin":
-        return "需求中包含 Wiki、文档、知识沉淀或岗位知识信号，已路由给知识运营部。"
-    return "需求属于通用交付或需要进一步拆解，已路由给任务交付组。"
+        return "这段内容包含 Wiki、文档、知识沉淀或岗位知识信号，已路由给知识运营部。"
+    return "这件事属于通用交付或需要进一步拆解，已路由给任务交付组。"
 
 
 def employee_payload(conn: Any, principal: Dict[str, Any], row: Dict[str, Any]) -> Dict[str, Any]:
@@ -1949,9 +2908,91 @@ def employee_payload(conn: Any, principal: Dict[str, Any], row: Dict[str, Any]) 
 
 def message_payload(row: Dict[str, Any]) -> Dict[str, Any]:
     payload = normalize(row)
-    payload["blocks"] = parse_json(row.get("blocks_json")) or []
+    payload["blocks"] = sanitize_message_blocks(parse_json(row.get("blocks_json")) or [])
     payload.pop("blocksJson", None)
     return payload
+
+
+def cleanup_legacy_client_concepts(conn: Any) -> None:
+    execute(
+        conn,
+        """
+        UPDATE wp_demand_group
+        SET title = '服务对话'
+        WHERE title IN ('新的客户需求', '新的需求沟通', '需求登记')
+           OR title LIKE %s
+        """,
+        ("新的客户需求%",),
+    )
+    execute(
+        conn,
+        """
+        UPDATE wp_conversation_session
+        SET title = '服务对话'
+        WHERE title IN ('新的客户需求', '新的需求沟通', '需求登记')
+           OR title LIKE %s
+        """,
+        ("新的客户需求%",),
+    )
+    rows = fetch_all(
+        conn,
+        """
+        SELECT id, blocks_json
+        FROM wp_message
+        WHERE blocks_json LIKE %s
+           OR blocks_json LIKE %s
+        """,
+        ("%需求登记%", "%我会先接待和澄清需求%"),
+    )
+    for row in rows:
+        blocks = parse_json(row.get("blocks_json")) or []
+        sanitized = sanitize_message_blocks(blocks)
+        if sanitized != blocks:
+            execute(conn, "UPDATE wp_message SET blocks_json = %s WHERE id = %s", (json_dumps(sanitized), row["id"]))
+
+
+def sanitize_message_blocks(blocks: Any) -> List[Dict[str, Any]]:
+    if not isinstance(blocks, list):
+        return []
+    sanitized: List[Dict[str, Any]] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        if is_legacy_intake_form_block(block):
+            continue
+        next_block = dict(block)
+        if next_block.get("type") == "markdown" and isinstance(next_block.get("content"), str):
+            next_block["content"] = sanitize_system_markdown(next_block["content"])
+        sanitized.append(next_block)
+    return sanitized
+
+
+def is_legacy_intake_form_block(block: Dict[str, Any]) -> bool:
+    if block.get("type") != "form":
+        return False
+    data = block.get("data") if isinstance(block.get("data"), dict) else {}
+    fields = data.get("fields") if isinstance(data.get("fields"), list) else []
+    field_names = {str(field.get("name")) for field in fields if isinstance(field, dict)}
+    title = str(block.get("title") or "")
+    submit_label = str(data.get("submitLabel") or "")
+    return (
+        "需求登记" in title
+        or "需求登记" in submit_label
+        or {"businessGoal", "expectedOutput", "materials"}.issubset(field_names)
+    )
+
+
+def sanitize_system_markdown(content: str) -> str:
+    return (
+        content.replace(
+            "你好，我是 **业务前台 Ada**。我会先接待和澄清需求，再按组织关系拆分给合适的团队。",
+            "你好，我是 **业务前台 Ada**。你可以直接说明要办理或咨询的事情；需要精确入参时，我会再给你对应表单。",
+        )
+        .replace(
+            "我会先接待和澄清需求，再按组织关系拆分给合适的团队。",
+            "你可以直接说明要办理或咨询的事情；需要精确入参时，我会再给你对应表单。",
+        )
+    )
 
 
 def public_principal(row: Dict[str, Any]) -> Dict[str, Any]:

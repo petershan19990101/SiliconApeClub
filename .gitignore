@@ -7,6 +7,7 @@
 **/__pycache__/
 *.pyc
 /target/
+**/target/**
 docspace-server/logs/
 /.mvn/wrapper/maven-wrapper.jar
 *.log
@@ -22,3 +23,5 @@ docspace-server/logs/
 # Worker platform local frontend artifacts.
 /siliconApeClub-worker-front/node_modules/
 /siliconApeClub-worker-front/dist/
+/siliconApeClub-admin/siliconApeClub-front/node_modules/
+/siliconApeClub-admin/siliconApeClub-front/dist*

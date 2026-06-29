@@ -139,10 +139,12 @@ select:focus {
 }
 
 .workspace {
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
   display: grid;
   grid-template-rows: auto 1fr;
   background: #f5f7f4;
+  overflow: hidden;
 }
 
 .topbar {
@@ -271,11 +273,12 @@ select:focus {
 
 .chat-panel {
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   overflow: hidden;
 }
 
 .chat-header {
+  grid-row: 1;
   display: flex;
   justify-content: space-between;
   gap: 16px;
@@ -301,6 +304,7 @@ select:focus {
 
 .inline-error,
 .error-text {
+  grid-row: 2;
   margin: 10px 16px;
   padding: 10px 12px;
   border-radius: 6px;
@@ -309,6 +313,8 @@ select:focus {
 }
 
 .message-stream {
+  grid-row: 3;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -354,6 +360,8 @@ select:focus {
 .html-block,
 .info-block,
 .dynamic-form,
+.code-block,
+.image-block,
 .json-block {
   display: grid;
   gap: 9px;
@@ -363,13 +371,98 @@ select:focus {
   background: #ffffff;
 }
 
+.code-block pre,
+.json-block {
+  max-width: 100%;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border-radius: 7px;
+  color: #f5f7fb;
+  background: #17201c;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.code-block code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  white-space: pre;
+}
+
+.image-block {
+  margin: 0;
+}
+
+.image-block img,
+.artifact-block img {
+  display: block;
+  max-width: 100%;
+  max-height: 420px;
+  border-radius: 7px;
+  object-fit: contain;
+  background: #f4f7f5;
+}
+
+.image-block figcaption {
+  color: #607169;
+  font-size: 12px;
+}
+
 .dynamic-form {
   background: #f9fbf8;
+}
+
+.form-html {
+  padding: 10px;
+  border-radius: 6px;
+  color: #31433a;
+  background: #eef5f1;
+}
+
+.form-html h3,
+.form-html p {
+  margin: 0;
+}
+
+.form-html h3 + p {
+  margin-top: 6px;
 }
 
 .dynamic-form button {
   width: fit-content;
   padding: 0 15px;
+}
+
+.dynamic-form label small {
+  color: #7b8981;
+}
+
+.submitted-form {
+  background: #ffffff;
+}
+
+.submission-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.submission-grid div {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #f4f7f5;
+}
+
+.submission-grid span {
+  color: #65746b;
+  font-size: 12px;
+}
+
+.submission-grid b {
+  font-size: 13px;
+  font-weight: 700;
+  color: #24332c;
 }
 
 .route-line {
@@ -412,21 +505,31 @@ select:focus {
 }
 
 .composer {
+  grid-row: 4;
+  align-self: end;
   display: grid;
-  grid-template-columns: 1fr 48px;
-  gap: 10px;
-  padding: 14px;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  align-items: end;
+  gap: 8px;
+  padding: 10px 14px;
   border-top: 1px solid #edf1ee;
 }
 
 .composer textarea {
-  min-height: 48px;
-  max-height: 140px;
+  height: 42px;
+  min-height: 42px;
+  max-height: 42px;
+  line-height: 20px;
+  resize: none;
+  overflow-y: auto;
 }
 
 .composer button {
-  width: 48px;
-  min-height: 48px;
+  width: 42px;
+  height: 42px;
+  min-height: 42px;
+  display: grid;
+  place-items: center;
 }
 
 .employee-list,
@@ -434,6 +537,91 @@ select:focus {
   display: grid;
   gap: 10px;
   padding: 12px;
+}
+
+.capability-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid #edf1ee;
+}
+
+.capability-group,
+.employee-department {
+  display: grid;
+  gap: 8px;
+}
+
+.capability-group-items,
+.employee-department-items {
+  display: grid;
+  gap: 8px;
+}
+
+.group-toggle {
+  min-height: 34px;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border-radius: 6px;
+  color: #26362f;
+  background: #eef3ef;
+  text-align: left;
+}
+
+.group-toggle span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.group-toggle small {
+  min-width: 22px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #2d7066;
+  background: #ffffff;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.capability-button {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  padding: 12px;
+  text-align: left;
+  border: 1px solid #dce6e1;
+  border-radius: 8px;
+  color: #182820;
+  background: #f7fbf8;
+}
+
+.capability-button:hover {
+  border-color: #2d7066;
+  background: #edf6f3;
+}
+
+.capability-button span {
+  color: #65746b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.capability-button small {
+  width: fit-content;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #255c54;
+  background: #e4f3ef;
+  font-size: 11px;
+  font-weight: 800;
 }
 
 .employee-row,

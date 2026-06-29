@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field
 MessageBlockType = Literal[
     "markdown",
     "html",
+    "code",
+    "image",
     "form",
     "artifact",
     "task_status",
@@ -94,3 +96,17 @@ class SkillProposalCreate(BaseModel):
     outputSchemaJson: str = "{}"
     orchestrationConfigJson: str = "{}"
     guardrailsJson: str = "{}"
+
+
+class CapabilityProposalCreate(BaseModel):
+    taskId: Optional[str] = None
+    demandGroupId: Optional[str] = None
+    sourceEmployeeId: Optional[str] = None
+    code: str
+    name: str
+    description: Optional[str] = None
+    departmentId: Optional[int] = None
+    inputSchemaJson: str
+    outputSchemaJson: str = "{}"
+    orchestrationConfigJson: str = "{}"
+    guardrailsJson: str = '{"externalVisible": true, "humanReviewRequired": true}'

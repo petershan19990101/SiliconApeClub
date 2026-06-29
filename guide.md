@@ -9,7 +9,7 @@
 | 用途 | 地址 | 说明 |
 | --- | --- | --- |
 | 硅基猿猴俱乐部管理台 | `http://localhost:3000` | Docker 静态资源容器入口，根路径会跳转到 `/m/silicon-ape-club-admin/` |
-| AI 员工平台前端 | `http://localhost:3011` | 客户需求工作台、业务前台、员工派活、聊天记录和任务恢复入口 |
+| AI 员工平台前端 | `http://localhost:3011` | AI 员工服务台、业务前台聊天、快捷能力、多模态输出和任务恢复入口 |
 | AI 员工平台后端 | `http://localhost:3010` | Worker Platform API 与健康检查入口 |
 | 管理台后端 | `http://localhost:8080` | 知识资产、Wiki、AI 员工、权限、审计、通知等主入口 |
 | Swagger UI | `http://localhost:8080/swagger-ui/index.html` | 后端接口调试入口 |
@@ -27,7 +27,7 @@
 | --- | --- | --- | --- |
 | 管理员 | `admin` 或 `zhangsan` | `Admin@123` | 具备管理、审核、发布、权限维护能力 |
 | 普通成员 | `member` 或 `lisi` | `Member@123` | 具备普通文档查看、上传等能力 |
-| AI 员工平台外部客户 | `customer` | `Customer@123` | 只能查看自己的需求组，由业务前台接待 |
+| AI 员工平台外部客户 | `customer` | `Customer@123` | 只能查看自己的服务对话，由业务前台接待 |
 | AI 员工平台内部人员 | `internal` | `Internal@123` | 可查看组织关系，并对授权员工咨询或派活 |
 | AI 员工平台管理员 | `admin` | `Admin@123` | 可查看组织关系和所有员工权限 |
 
@@ -190,13 +190,15 @@ GROUP BY knowledge_status;
 ### 2.5 组织与人力中心、客户会员中心
 
 1. 在管理台进入 `组织与人力中心`，左侧公司组织可点击筛选；右侧默认只展示在岗 AI 员工，可勾选 `显示离职/下线` 查看历史员工。
-2. 点击员工 `配置`，可维护 AI 员工编码、名称、部门、岗位、职责、审核通过技能、个人记忆策略、模型配置、成本基线、岗位知识和考核规则。
+2. 点击员工 `配置` 会打开弹窗，可维护 AI 员工编码、名称、部门、岗位、职责、审核通过技能、个人记忆策略、模型 Profile、成本基线、岗位知识和考核规则。模型 Profile 下拉来自 `系统设置 / AI 模型配置` 中启用的 `worker_chat` 配置。
 3. 点击员工 `下线` 会将员工标记为离职/下线，清理 `ks_task_memory`、`ks_runtime_session` 等个人记忆数据，并移除客户可见性；其已经产生的文档、Wiki、RAG 资产作者归属不变。
 4. 在 `绩效与成本` 区域查看员工 Token 消耗、记忆容量、任务数、候选 Wiki 数和考核指标。
 5. 进入 `技能仓库`，可维护技能编码、部门、类型、等级、调用方式、输入输出 Schema、编排配置和安全规则；技能需要提交审核并通过后，才能在员工配置中勾选绑定。
-6. 高级技能通过 `skillLevel=advanced` 标记，第一版由管理台管理员维护开放边界，worker platform 投影后再结合员工权限使用。
-7. 进入 `客户会员中心`，选择客户后维护可见部门、可见员工、可咨询和可派活权限。
-8. Worker Platform 启动时会把管理台 `ds_department`、`ds_ai_employee`、`hr_*`、`customer_*` 投影到 `wp_org_unit`、`wp_ai_employee`、`wp_org_relation`、`wp_worker_skill`、`wp_skill_binding`、`wp_employee_permission`。
+6. 高级技能通过 `skillLevel=advanced` 标记，后端强制只有顶级管理人员可维护、审核通过和绑定；非顶级管理人员即使临时拥有菜单管理权限，也会被接口拒绝。
+7. 进入 `系统快捷能力`，维护客户端右侧快捷能力的分组、能力名称、交易系统服务编码、动作码、表单 Schema、展示 HTML、关键词、启停、排序和外部/内部可见性。它代表业务系统对客接口，不属于 AI 员工技能仓库。
+8. 已内置业务下单、查询订单进度、退货申请、查询服务地址四个快捷能力；禁用后客户端不再展示。
+9. 进入 `客户会员中心`，先维护客户角色默认可见部门/员工，再按会员维护附加可见部门/员工、可咨询和可派活权限。默认 `external_customer` 角色可见客服部员工，可咨询不可派活。
+10. Worker Platform 启动时会把管理台 `ds_department`、`ds_ai_employee`、`hr_*`、`customer_*` 投影到 `wp_org_unit`、`wp_ai_employee`、`wp_org_relation`、`wp_worker_skill`、`wp_skill_binding`、`wp_employee_permission`；客户端快捷能力从 `client_quick_capability_group`、`client_quick_capability` 读取。
 9. 文档解析成功后默认点击 `生成 Wiki`，系统会先生成或更新 LLM Wiki，再发布并写入 `ks_chunk`、`ks_index_record`、`ks_sync_job`；直推 RAG 仅作为兼容/排障入口。
 10. 进入 `RAG 管理台`，先选择 AI 员工，系统会自动带出该员工的 `actorId`、部门和岗位编码。
 11. `索引 Chunk 治理` 会展示最近 active chunk。点击其中一条可直接把标题/预览带入检索问题，用于验证新入库文档或 Wiki 是否已可被 RAG 召回。
@@ -230,13 +232,94 @@ SELECT code, name, enabled FROM wp_worker_skill ORDER BY code;
 SELECT employee_id, skill_id, enabled FROM wp_skill_binding ORDER BY employee_id, skill_id;
 ```
 
-### 2.6 Wiki 中心与岗位知识管理
+AI 员工技能提案验证：
+
+```http
+POST http://localhost:3010/api/worker-platform/skills/proposals
+Authorization: Bearer <worker platform 登录 token>
+Content-Type: application/json
+
+{
+  "sourceEmployeeId": "employee-admin-<admin_employee_id>",
+  "code": "skill_from_employee_demo",
+  "name": "AI 员工总结技能示例",
+  "description": "由 AI 员工在任务过程中总结，进入技能仓库待审核。",
+  "skillType": "engineering",
+  "skillLevel": "basic",
+  "invocationMode": "tool_call",
+  "inputSchemaJson": "{}",
+  "outputSchemaJson": "{}",
+  "orchestrationConfigJson": "{\"preferredModelProfile\":\"technology_architect_model\"}",
+  "guardrailsJson": "{\"humanReviewRequired\":true}"
+}
+```
+
+提交后检查：
+
+```sql
+SELECT code, name, source_type, review_status, enabled
+FROM hr_skill_repository
+WHERE code = 'skill_from_employee_demo';
+```
+
+预期：`source_type=ai_employee`、`review_status=pending_review`、`enabled=0`。审核通过前不会出现在 `wp_worker_skill` 中。
+
+### 2.6 AI 模型配置
+
+1. 管理员登录管理台，进入 `系统设置 / AI 模型配置`。
+2. 首批内置 4 类模型用途：
+   - `document_to_wiki`：文档解析后生成 LLM Wiki。
+   - `rag_embedding`：Wiki、文档 chunk 和 RAG 查询向量化。
+   - `rag_rerank`：RAG 检索结果重排。
+   - `worker_chat`：AI 员工服务台聊天分析和组织派发说明。
+3. 点击 `编辑` 可以维护供应商、接口地址、模型名、API key、向量维度、超时时间、是否启用、是否默认和 fallback 策略。
+4. API key 不会在前端明文回显；编辑时留空表示不改，清空后保存表示移除密钥。
+5. 点击 `测试`：
+   - `ok` 表示真实模型接口调用成功。
+   - `not_configured` 表示还未配置 API key。
+   - `failed` 表示接口调用失败，需要检查 endpoint、model、key、网络或供应商限流。
+6. 当前本地 Docker 开发环境允许 fallback，但 fallback 会写入 metadata 或 debug 信息，不能视为真实模型调用成功。
+
+数据库检查：
+
+```sql
+SELECT profile_code, purpose, provider, model_name, enabled, default_profile,
+       CASE WHEN api_key IS NULL OR api_key = '' THEN 0 ELSE 1 END AS api_key_configured,
+       fallback_enabled
+FROM sys_ai_model_profile
+ORDER BY purpose, default_profile DESC, id;
+```
+
+模型调用链路检查：
+
+```sql
+-- 文档转 Wiki 流水线 metadata 中应包含 aiModel
+SELECT id, job_type, source_id, status, metadata
+FROM ks_pipeline_job
+WHERE job_type = 'document_to_wiki'
+ORDER BY id DESC
+LIMIT 5;
+
+-- RAG chunk metadata 中应包含 embeddingRealCall / embeddingFallbackUsed
+SELECT id, embedding_model, embedding_version, metadata
+FROM ks_chunk
+ORDER BY id DESC
+LIMIT 5;
+
+-- AI 员工聊天消息 markdown block data 中应包含 worker_chat 调用状态
+SELECT id, sender_type, blocks_json
+FROM wp_message
+ORDER BY created_at DESC
+LIMIT 5;
+```
+
+### 2.7 Wiki 中心与岗位知识管理
 
 1. `Wiki 中心` 负责 Wiki 页面增删改查、发布同步 RAG、归档和删除。
 2. `岗位知识管理` 基于 Wiki 页面勾选岗位知识范围，支持草稿、提交审核、审核通过、驳回、归档和删除。
 3. AI 员工绑定的是岗位知识对象；运行时再从岗位知识对象读取 Wiki 页面集合、必读标记和默认检索范围。
 
-### 2.7 Wiki 中心结构化工作台
+### 2.8 Wiki 中心结构化工作台
 
 1. 进入 `Wiki 中心` 后，页面分为三栏：左侧结构分组树、中间 Wiki 页面列表、右侧详情和知识图谱关系。
 2. 左侧默认按 `部门 / 类型 / 状态` 聚合，也可切换为 `类型 / 状态`。点击任意分组后，页面列表会按该分组过滤。
@@ -247,21 +330,23 @@ SELECT employee_id, skill_id, enabled FROM wp_skill_binding ORDER BY employee_id
 
 ## 3. AI 员工平台操作
 
-### 3.1 外部客户提需求
+### 3.1 外部客户开始服务对话
 
 1. 打开 `http://localhost:3011`。
 2. 使用 `customer / Customer@123` 登录。
-3. 在左侧 `客户历史需求` 输入需求标题，点击 `新建`。
+3. 左侧是 `历史对话`，点击 `开始对话` 后即可直接聊天；页面不会预置登记表。
 4. 进入聊天区后，默认由 `业务前台 Ada` 接待。
-5. 可以直接输入自然语言任务，也可以填写 AI 输出的动态表单。
-6. 系统会自动建立需求组、会话、消息、任务账本，并把任务按组织关系派发给合适员工。
-7. 外部客户只能查看自己的需求组、聊天记录、任务状态和产出物；右侧组织员工列表只展示 `客户会员中心` 授权的部门和员工。
+5. 可以先自然聊天；AI 员工识别到下单、查订单、退货、查询地址等确定性业务时，才会输出对应表单。
+6. 也可以在右侧按分组展示的 `快捷能力` 中直接选择业务下单、查询订单进度、退货申请或查询服务地址。
+7. 表单提交后，系统会把结构化 values 写入表单提交账本，并按系统快捷能力中的 `transactionServiceCode + actionCode` 执行确定性业务动作；这类动作不需要为了入参再调用大模型。
+8. 需要组织协作的事项会继续建立任务账本，并按组织关系派发给合适员工。
+9. 外部客户只能查看自己的历史对话、聊天记录、任务状态和产出物；右侧 `员工直通` 默认按部门折叠，只展示客户角色默认规则和会员附加规则授权的员工。
 
 ### 3.2 内部人员派活或咨询
 
 1. 使用 `internal / Internal@123` 登录 AI 员工平台。
-2. 右侧 `组织与任务` 会展示权限范围内的 AI 员工。
-3. 可直接指定员工创建需求，也可以在已有需求中继续沟通。
+2. 右侧 `员工直通` 会按部门折叠展示权限范围内的 AI 员工。
+3. 可直接指定员工开始对话，也可以在已有对话中继续沟通。
 4. 内部人员具备 `consult_employee` 权限时可以咨询员工，具备 `assign_employee` 权限时可以派活。
 5. 当前管理台种子组织包含：业务战略部、客户服务部、市场部、科技部、研发中心、公共研发战队、运维中心和安全中心。worker platform 会投影这些组织和员工。
 
@@ -269,7 +354,7 @@ SELECT employee_id, skill_id, enabled FROM wp_skill_binding ORDER BY employee_id
 
 1. 每次 AI 员工接到任务都会写入 `wp_task_run`。
 2. 任务事件写入 `wp_task_event`，恢复点写入 `wp_task_checkpoint`。
-3. 服务重启、浏览器刷新或任务中断后，在需求组右侧 `任务账本` 点击恢复按钮即可继续。
+3. 服务重启、浏览器刷新或任务中断后，可在当前服务对话的 `任务账本` 点击恢复按钮继续。
 4. 取消任务会保留历史事件，便于测试回放。
 5. 后续任务转派、审核、协作记录统一写入 `wp_collaboration_thread`。
 
@@ -281,12 +366,14 @@ AI 员工平台聊天记录不是纯文本，消息由 block 组成：
 | --- | --- |
 | `markdown` | 普通说明、结论、步骤 |
 | `html` | 受控展示块，不用于提交关键数据 |
-| `form` | 精准结构化数据提交 |
+| `form` | 精准结构化数据提交；业务动作表单提交时会携带 `capabilityCode` 和 `values` |
 | `artifact` | PDF、Word、图片等产出物入口 |
 | `task_status` | 任务状态和进度 |
 | `org_route` | 组织派发路径 |
 | `employee_card` | 接手员工和能力说明 |
 | `handoff` | 转派、协作和交接记录 |
+
+快捷能力表单来自管理台技能仓库中审核通过的 `business_action` / `form_template`，默认表单包括业务下单、查询订单进度、退货申请、查询服务地址。
 
 ## 4. 权限说明
 
@@ -299,7 +386,7 @@ AI 员工平台聊天记录不是纯文本，消息由 block 组成：
 | 目录权限 | 控制目录下文件的默认访问能力 | `ds_folder_permission` |
 | 文档权限 | 控制单个文档的查看、编辑、删除等能力 | `ds_document_permission` |
 | 知识权限 | 控制 Wiki/RAG chunk 是否能被人或 AI 员工使用 | `ks_acl_policy`、`ks_acl_binding`、`ks_chunk` |
-| AI 员工平台权限 | 控制客户需求组可见性、组织树可见性、员工咨询和员工派活 | `wp_principal`、`wp_employee_permission`、`wp_demand_group` |
+| AI 员工平台权限 | 控制服务对话可见性、组织树可见性、员工咨询和员工派活 | `wp_principal`、`wp_employee_permission`、`wp_demand_group` |
 | 审计追踪 | 记录关键动作和执行结果 | `ds_document_audit`、`ks_audit_trace` |
 
 ### 4.2 常见权限动作
@@ -389,7 +476,7 @@ LIMIT 10;
 
 ### 5.4 AI 员工平台
 
-查看客户需求组、会话和消息：
+查看 AI 员工服务对话、会话和消息。`wp_demand_group` 是后端内部归档表名，前台页面不展示“需求”概念：
 
 ```sql
 SELECT id, owner_principal_id, title, status,
@@ -410,6 +497,25 @@ LIMIT 10;
 SELECT id, demand_group_id, session_id, sender_type, sender_name,
        left(blocks_json, 180) AS blocks_preview, created_at
 FROM wp_message
+ORDER BY created_at DESC
+LIMIT 10;
+```
+
+查看快捷能力和表单提交：
+
+```sql
+SELECT g.group_code, g.group_name, c.capability_code, c.capability_name,
+       c.transaction_service_code, c.action_code, c.enabled,
+       left(c.input_schema_json, 120) AS input_schema_preview
+FROM client_quick_capability c
+JOIN client_quick_capability_group g ON g.id = c.group_id
+ORDER BY g.group_sort, c.sort_order;
+```
+
+```sql
+SELECT id, capability_code, capability_name, submitted_by_principal_id,
+       task_id, status, left(values_json, 160) AS values_preview, created_at
+FROM wp_form_submission
 ORDER BY created_at DESC
 LIMIT 10;
 ```
@@ -651,10 +757,13 @@ curl http://localhost:8093/health
 | 通知可查询 | `ks_notification` 有成功或失败通知 |
 | AI 员工平台可登录 | `customer/Customer@123` 登录成功 |
 | 管理端组织已配置 | `组织与人力中心` 能看到种子公司组织和 AI 员工 |
-| 客户可见性可维护 | `客户会员中心` 能保存可见部门、可见员工、咨询和派活权限 |
-| 外部客户组织受控可见 | `customer/Customer@123` 只能看到客户会员中心授权的部门和员工 |
+| 客户可见性可维护 | `客户会员中心` 能保存客户角色默认规则和会员附加规则 |
+| 外部客户组织受控可见 | `customer/Customer@123` 默认只能看到客服部可咨询员工和会员附加授权员工 |
 | 内部人员可见组织树 | `internal/Internal@123` 可看到完整 AI 员工列表 |
-| 需求组可归档聊天 | `wp_demand_group`、`wp_conversation_session`、`wp_message` 有记录 |
+| 服务对话可归档聊天 | `wp_demand_group`、`wp_conversation_session`、`wp_message` 有记录 |
+| 快捷能力可展示 | `GET /api/worker-platform/quick-capabilities` 返回按分组配置的业务下单、查询订单进度、退货申请、查询服务地址 |
+| 聊天可识别表单 | 输入“我要下单”后 AI 员工返回 `form` block，而不是直接创建通用任务 |
+| 表单提交可入账 | `wp_form_submission`、`wp_task_run`、`wp_task_event` 有对应记录 |
 | 长任务可恢复 | `wp_task_run`、`wp_task_event`、`wp_task_checkpoint` 有记录 |
 
 ## 7. 常见问题定位
@@ -669,7 +778,7 @@ curl http://localhost:8093/health
 | 权限不符合预期 | 查看 `ds_folder_permission`、`ds_document_permission`、`sys_role_permission` |
 | AI 员工平台打不开 | 查看 `sac-siliconapeclub-worker-front` 是否运行、`3011` 是否被占用 |
 | AI 员工平台接口失败 | 查看 `sac-siliconapeclub-worker-platform` 是否运行、`3010` 是否可访问，确认 worker-front 的 Nginx 代理配置 |
-| 外部客户看不到员工 | 查看 `客户会员中心` 是否给客户绑定可见员工，并确认 worker platform 已重启或重新投影 |
+| 外部客户看不到员工 | 查看 `客户会员中心` 的客户角色默认可见性是否包含客服部员工，确认 worker platform 已重启或重新投影 |
 | 员工派活失败 | 查看 `wp_employee_permission` 是否有 `assign_employee` |
 | 任务恢复失败 | 查看 `wp_task_run.status`、`wp_task_checkpoint` 和容器日志 |
 | 数据库表不存在 | 查看 `flyway_schema_history`，确认迁移是否成功 |

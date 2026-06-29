@@ -43,6 +43,70 @@ const EMPTY_FORM: SkillForm = {
   enabled: true,
 };
 
+const BUSINESS_ACTION_PRESETS: Array<{ label: string; patch: Partial<SkillForm> }> = [
+  {
+    label: '业务下单',
+    patch: {
+      code: 'business_order_create',
+      name: '业务下单',
+      description: '收集商品、数量、联系人和收货地址，直接创建演示订单。',
+      skillType: 'business_action',
+      invocationMode: 'form_submit',
+      inputSchemaJson: JSON.stringify({
+        title: '业务下单',
+        required: ['productName', 'quantity', 'deliveryAddress', 'contactPhone'],
+        properties: {
+          productName: { type: 'string', title: '商品/服务名称' },
+          quantity: { type: 'number', title: '数量', default: 1 },
+          deliveryAddress: { type: 'string', title: '收货/服务地址', 'ui:widget': 'textarea' },
+          contactPhone: { type: 'string', title: '联系电话' },
+          remark: { type: 'string', title: '备注', 'ui:widget': 'textarea' },
+        },
+      }, null, 2),
+      outputSchemaJson: '{"type":"object","properties":{"orderId":{"type":"string"},"status":{"type":"string"}}}',
+      orchestrationConfigJson: JSON.stringify({
+        actionCode: 'create_order',
+        formTitle: '业务下单',
+        submitLabel: '提交订单',
+        defaultVisible: true,
+        deterministic: true,
+        keywords: ['下单', '订购', '购买', 'order'],
+        routeEmployeeCodes: ['frontdesk-ada', 'customer-service-01'],
+        displayHtml: '<section><h3>业务下单</h3><p>请填写精确入参，提交后直接创建订单账本。</p></section>',
+      }, null, 2),
+      guardrailsJson: '{"externalVisible":true,"humanReviewRequired":false}',
+    },
+  },
+  {
+    label: '查订单',
+    patch: {
+      code: 'business_order_query',
+      name: '查询订单进度',
+      description: '通过订单号和联系方式查询当前订单处理进度。',
+      skillType: 'business_action',
+      invocationMode: 'form_submit',
+      inputSchemaJson: '{"title":"查询订单进度","required":["orderId"],"properties":{"orderId":{"type":"string","title":"订单号"},"contactPhone":{"type":"string","title":"联系电话"}}}',
+      outputSchemaJson: '{"type":"object","properties":{"orderId":{"type":"string"},"status":{"type":"string"}}}',
+      orchestrationConfigJson: '{"actionCode":"query_order_status","formTitle":"查询订单进度","submitLabel":"查询进度","defaultVisible":true,"deterministic":true,"keywords":["订单进度","查订单","查询订单","进度","order status"],"routeEmployeeCodes":["frontdesk-ada","customer-service-01"]}',
+      guardrailsJson: '{"externalVisible":true,"humanReviewRequired":false}',
+    },
+  },
+  {
+    label: '退货申请',
+    patch: {
+      code: 'business_return_request',
+      name: '退货申请',
+      description: '收集订单号、退货原因和取件信息，登记退货申请。',
+      skillType: 'business_action',
+      invocationMode: 'form_submit',
+      inputSchemaJson: '{"title":"退货申请","required":["orderId","reason","pickupAddress"],"properties":{"orderId":{"type":"string","title":"订单号"},"reason":{"type":"string","title":"退货原因","ui:widget":"textarea"},"pickupAddress":{"type":"string","title":"取件地址","ui:widget":"textarea"},"contactPhone":{"type":"string","title":"联系电话"}}}',
+      outputSchemaJson: '{"type":"object","properties":{"returnRequestId":{"type":"string"},"status":{"type":"string"}}}',
+      orchestrationConfigJson: '{"actionCode":"return_request","formTitle":"退货申请","submitLabel":"提交退货申请","defaultVisible":true,"deterministic":true,"keywords":["退货","退款","售后","return"],"routeEmployeeCodes":["frontdesk-ada","customer-service-01"]}',
+      guardrailsJson: '{"externalVisible":true,"humanReviewRequired":false}',
+    },
+  },
+];
+
 export function SkillRepository() {
   const toast = useToast();
   const { currentUser } = useUser();
@@ -85,6 +149,15 @@ export function SkillRepository() {
   const startCreate = () => {
     setSelectedSkill(null);
     setForm({ ...EMPTY_FORM, departmentId: departments[0]?.id || '' });
+  };
+
+  const applyPreset = (patch: Partial<SkillForm>) => {
+    setSelectedSkill(null);
+    setForm({
+      ...EMPTY_FORM,
+      departmentId: form.departmentId || departments[0]?.id || '',
+      ...patch,
+    });
   };
 
   const startEdit = async (skill: SkillRepositoryItem) => {
@@ -253,6 +326,19 @@ export function SkillRepository() {
             </div>
           </div>
 
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <span className="text-xs font-bold text-slate-500">业务表单模板</span>
+            {BUSINESS_ACTION_PRESETS.map((preset) => (
+              <button
+                key={preset.label}
+                onClick={() => applyPreset(preset.patch)}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700"
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <input value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} placeholder="技能编码" className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none" />
             <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="技能名称" className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none" />
@@ -269,9 +355,16 @@ export function SkillRepository() {
           </div>
 
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <input value={form.skillType} onChange={(event) => setForm({ ...form, skillType: event.target.value })} placeholder="技能类型" className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none" />
+            <select value={form.skillType} onChange={(event) => setForm({ ...form, skillType: event.target.value })} className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none">
+              <option value="tool">工具技能</option>
+              <option value="planning">规划技能</option>
+              <option value="diagnosis">诊断技能</option>
+              <option value="business_action">业务动作表单</option>
+              <option value="form_template">表单模板</option>
+            </select>
             <select value={form.invocationMode} onChange={(event) => setForm({ ...form, invocationMode: event.target.value })} className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none">
               <option value="tool_call">工具调用</option>
+              <option value="form_submit">表单提交</option>
               <option value="prompt_chain">提示链</option>
               <option value="workflow">工作流</option>
               <option value="human_handoff">人工交接</option>

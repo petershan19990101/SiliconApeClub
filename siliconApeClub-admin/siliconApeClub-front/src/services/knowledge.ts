@@ -15,6 +15,9 @@ import {
   OrgHumanCenterOverview,
   PositionKnowledgeItem,
   PositionPackage,
+  QuickCapability,
+  QuickCapabilityGroup,
+  QuickCapabilityOverview,
   RagAclBinding,
   RagAclPolicy,
   SkillRepositoryItem,
@@ -271,6 +274,9 @@ function normalizeCustomerVisibility(item: Record<string, unknown>): CustomerVis
     id: String(item.id),
     customerId: String(item.customerId ?? ''),
     customerName: item.customerName == null ? undefined : String(item.customerName),
+    roleId: item.roleId == null ? undefined : String(item.roleId),
+    roleName: item.roleName == null ? undefined : String(item.roleName),
+    roleCode: item.roleCode == null ? undefined : String(item.roleCode),
     departmentId: item.departmentId == null ? undefined : String(item.departmentId),
     departmentName: item.departmentName == null ? undefined : String(item.departmentName),
     aiEmployeeId: item.aiEmployeeId == null ? undefined : String(item.aiEmployeeId),
@@ -279,6 +285,50 @@ function normalizeCustomerVisibility(item: Record<string, unknown>): CustomerVis
     visibilityType: String(item.visibilityType ?? 'visible'),
     canConsult: item.canConsult == null ? undefined : item.canConsult === true || item.canConsult === 1,
     canAssign: item.canAssign == null ? undefined : item.canAssign === true || item.canAssign === 1,
+  };
+}
+
+function normalizeQuickCapabilityGroup(item: Record<string, unknown>): QuickCapabilityGroup {
+  return {
+    id: String(item.id),
+    groupCode: String(item.groupCode ?? ''),
+    groupName: String(item.groupName ?? ''),
+    description: item.description == null ? undefined : String(item.description),
+    groupSort: Number(item.groupSort ?? 100),
+    visibleToExternal: item.visibleToExternal == null ? true : item.visibleToExternal === true || item.visibleToExternal === 1,
+    visibleToInternal: item.visibleToInternal == null ? true : item.visibleToInternal === true || item.visibleToInternal === 1,
+    enabled: item.enabled == null ? true : item.enabled === true || item.enabled === 1,
+  };
+}
+
+function normalizeQuickCapability(item: Record<string, unknown>): QuickCapability {
+  return {
+    id: String(item.id),
+    groupId: String(item.groupId ?? ''),
+    groupCode: item.groupCode == null ? undefined : String(item.groupCode),
+    groupName: item.groupName == null ? undefined : String(item.groupName),
+    groupSort: item.groupSort == null ? undefined : Number(item.groupSort),
+    capabilityCode: String(item.capabilityCode ?? ''),
+    capabilityName: String(item.capabilityName ?? ''),
+    description: item.description == null ? undefined : String(item.description),
+    transactionServiceCode: String(item.transactionServiceCode ?? ''),
+    actionCode: String(item.actionCode ?? ''),
+    formTitle: item.formTitle == null ? undefined : String(item.formTitle),
+    submitLabel: item.submitLabel == null ? undefined : String(item.submitLabel),
+    inputSchemaJson: String(item.inputSchemaJson ?? '{}'),
+    displayHtml: item.displayHtml == null ? undefined : String(item.displayHtml),
+    keywordsJson: String(item.keywordsJson ?? '[]'),
+    visibleToExternal: item.visibleToExternal == null ? true : item.visibleToExternal === true || item.visibleToExternal === 1,
+    visibleToInternal: item.visibleToInternal == null ? true : item.visibleToInternal === true || item.visibleToInternal === 1,
+    enabled: item.enabled == null ? true : item.enabled === true || item.enabled === 1,
+    sortOrder: Number(item.sortOrder ?? 100),
+  };
+}
+
+function normalizeQuickCapabilityOverview(data: Record<string, unknown>): QuickCapabilityOverview {
+  return {
+    groups: Array.isArray(data.groups) ? data.groups.map((item) => normalizeQuickCapabilityGroup(item as Record<string, unknown>)) : [],
+    capabilities: Array.isArray(data.capabilities) ? data.capabilities.map((item) => normalizeQuickCapability(item as Record<string, unknown>)) : [],
   };
 }
 
@@ -395,6 +445,31 @@ function wikiPageQuery(options: { query?: string; status?: string; departmentId?
   return params.toString() ? `?${params.toString()}` : '';
 }
 
+function normalizeOrgHumanCenterOverview(data: Record<string, unknown>): OrgHumanCenterOverview {
+  return {
+    departments: Array.isArray(data.departments) ? data.departments.map((item) => normalizeDepartment(item as Record<string, unknown>)) : [],
+    positions: Array.isArray(data.positions) ? data.positions.map((item) => normalizeRecord(item as Record<string, unknown>)) : [],
+    roles: Array.isArray(data.roles) ? data.roles.map((item) => normalizeHrRole(item as Record<string, unknown>)) : [],
+    modelProfiles: Array.isArray(data.modelProfiles) ? data.modelProfiles.map((item) => normalizeModelProfile(item as Record<string, unknown>)) : [],
+    employees: Array.isArray(data.employees) ? data.employees.map((item) => normalizeAiEmployee(item as Record<string, unknown>)) : [],
+    skills: Array.isArray(data.skills) ? data.skills.map((item) => normalizeSkillRepositoryItem(item as Record<string, unknown>)) : [],
+    customers: Array.isArray(data.customers) ? data.customers.map((item) => normalizeCustomerMember(item as Record<string, unknown>)) : [],
+    customerRoles: Array.isArray(data.customerRoles) ? data.customerRoles.map((item) => normalizeHrRole(item as Record<string, unknown>)) : [],
+    customerDepartmentVisibility: Array.isArray(data.customerDepartmentVisibility)
+      ? data.customerDepartmentVisibility.map((item) => normalizeCustomerVisibility(item as Record<string, unknown>))
+      : [],
+    customerEmployeeVisibility: Array.isArray(data.customerEmployeeVisibility)
+      ? data.customerEmployeeVisibility.map((item) => normalizeCustomerVisibility(item as Record<string, unknown>))
+      : [],
+    customerRoleDepartmentVisibility: Array.isArray(data.customerRoleDepartmentVisibility)
+      ? data.customerRoleDepartmentVisibility.map((item) => normalizeCustomerVisibility(item as Record<string, unknown>))
+      : [],
+    customerRoleEmployeeVisibility: Array.isArray(data.customerRoleEmployeeVisibility)
+      ? data.customerRoleEmployeeVisibility.map((item) => normalizeCustomerVisibility(item as Record<string, unknown>))
+      : [],
+  };
+}
+
 export const knowledgeApi = {
   listWikiPages: async (query = '', status = '', filters: { departmentId?: string; pageType?: string } = {}) => {
     const data = await request<Array<Record<string, unknown>>>(`/api/wiki/pages${wikiPageQuery({ query, status, ...filters })}`);
@@ -476,28 +551,52 @@ export const knowledgeApi = {
     request<Record<string, unknown>>('/api/knowledge-health/maintenance-window/start', { method: 'POST', body: JSON.stringify({ reason }) }),
   endMaintenanceWindow: () => request<Record<string, unknown>>('/api/knowledge-health/maintenance-window/end', { method: 'POST' }),
 
+  getQuickCapabilityOverview: async (): Promise<QuickCapabilityOverview> => {
+    const data = await request<Record<string, unknown>>('/api/admin/quick-capabilities/overview');
+    return normalizeQuickCapabilityOverview(data);
+  },
+  createQuickCapabilityGroup: async (payload: Partial<QuickCapabilityGroup>): Promise<QuickCapabilityOverview> => {
+    const data = await request<Record<string, unknown>>('/api/admin/quick-capabilities/groups', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return normalizeQuickCapabilityOverview(data);
+  },
+  updateQuickCapabilityGroup: async (id: string, payload: Partial<QuickCapabilityGroup>): Promise<QuickCapabilityOverview> => {
+    const data = await request<Record<string, unknown>>(`/api/admin/quick-capabilities/groups/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    return normalizeQuickCapabilityOverview(data);
+  },
+  createQuickCapability: async (payload: Partial<QuickCapability>): Promise<QuickCapabilityOverview> => {
+    const data = await request<Record<string, unknown>>('/api/admin/quick-capabilities', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return normalizeQuickCapabilityOverview(data);
+  },
+  updateQuickCapability: async (id: string, payload: Partial<QuickCapability>): Promise<QuickCapabilityOverview> => {
+    const data = await request<Record<string, unknown>>(`/api/admin/quick-capabilities/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    return normalizeQuickCapabilityOverview(data);
+  },
+  setQuickCapabilityEnabled: async (id: string, enabled: boolean): Promise<QuickCapabilityOverview> => {
+    const data = await request<Record<string, unknown>>(`/api/admin/quick-capabilities/${id}/${enabled ? 'enable' : 'disable'}`, {
+      method: 'POST',
+    });
+    return normalizeQuickCapabilityOverview(data);
+  },
+
   listAiEmployees: async () => {
     const data = await request<Array<Record<string, unknown>>>('/api/admin/ai-employees');
     return data.map(normalizeAiEmployee);
   },
   getOrgHumanCenter: async (): Promise<OrgHumanCenterOverview> => {
     const data = await request<Record<string, unknown>>('/api/admin/org-human-center');
-    return {
-      departments: Array.isArray(data.departments) ? data.departments.map((item) => normalizeDepartment(item as Record<string, unknown>)) : [],
-      positions: Array.isArray(data.positions) ? data.positions.map((item) => normalizeRecord(item as Record<string, unknown>)) : [],
-      roles: Array.isArray(data.roles) ? data.roles.map((item) => normalizeHrRole(item as Record<string, unknown>)) : [],
-      modelProfiles: Array.isArray(data.modelProfiles) ? data.modelProfiles.map((item) => normalizeModelProfile(item as Record<string, unknown>)) : [],
-      employees: Array.isArray(data.employees) ? data.employees.map((item) => normalizeAiEmployee(item as Record<string, unknown>)) : [],
-      skills: Array.isArray(data.skills) ? data.skills.map((item) => normalizeSkillRepositoryItem(item as Record<string, unknown>)) : [],
-      customers: Array.isArray(data.customers) ? data.customers.map((item) => normalizeCustomerMember(item as Record<string, unknown>)) : [],
-      customerRoles: Array.isArray(data.customerRoles) ? data.customerRoles.map((item) => normalizeHrRole(item as Record<string, unknown>)) : [],
-      customerDepartmentVisibility: Array.isArray(data.customerDepartmentVisibility)
-        ? data.customerDepartmentVisibility.map((item) => normalizeCustomerVisibility(item as Record<string, unknown>))
-        : [],
-      customerEmployeeVisibility: Array.isArray(data.customerEmployeeVisibility)
-        ? data.customerEmployeeVisibility.map((item) => normalizeCustomerVisibility(item as Record<string, unknown>))
-        : [],
-    };
+    return normalizeOrgHumanCenterOverview(data);
   },
   updateCustomerVisibility: async (
     customerId: string,
@@ -507,22 +606,17 @@ export const knowledgeApi = {
       method: 'PUT',
       body: JSON.stringify(payload),
     });
-    return {
-      departments: Array.isArray(data.departments) ? data.departments.map((item) => normalizeDepartment(item as Record<string, unknown>)) : [],
-      positions: Array.isArray(data.positions) ? data.positions.map((item) => normalizeRecord(item as Record<string, unknown>)) : [],
-      roles: Array.isArray(data.roles) ? data.roles.map((item) => normalizeHrRole(item as Record<string, unknown>)) : [],
-      modelProfiles: Array.isArray(data.modelProfiles) ? data.modelProfiles.map((item) => normalizeModelProfile(item as Record<string, unknown>)) : [],
-      employees: Array.isArray(data.employees) ? data.employees.map((item) => normalizeAiEmployee(item as Record<string, unknown>)) : [],
-      skills: Array.isArray(data.skills) ? data.skills.map((item) => normalizeSkillRepositoryItem(item as Record<string, unknown>)) : [],
-      customers: Array.isArray(data.customers) ? data.customers.map((item) => normalizeCustomerMember(item as Record<string, unknown>)) : [],
-      customerRoles: Array.isArray(data.customerRoles) ? data.customerRoles.map((item) => normalizeHrRole(item as Record<string, unknown>)) : [],
-      customerDepartmentVisibility: Array.isArray(data.customerDepartmentVisibility)
-        ? data.customerDepartmentVisibility.map((item) => normalizeCustomerVisibility(item as Record<string, unknown>))
-        : [],
-      customerEmployeeVisibility: Array.isArray(data.customerEmployeeVisibility)
-        ? data.customerEmployeeVisibility.map((item) => normalizeCustomerVisibility(item as Record<string, unknown>))
-        : [],
-    };
+    return normalizeOrgHumanCenterOverview(data);
+  },
+  updateCustomerRoleVisibility: async (
+    roleId: string,
+    payload: { departmentIds: string[]; employees: Array<{ aiEmployeeId: string; canConsult: boolean; canAssign: boolean }> }
+  ): Promise<OrgHumanCenterOverview> => {
+    const data = await request<Record<string, unknown>>(`/api/admin/org-human-center/customer-roles/${roleId}/visibility`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    return normalizeOrgHumanCenterOverview(data);
   },
   getAiEmployee: async (id: string) => {
     const data = await request<Record<string, unknown>>(`/api/admin/ai-employees/${id}`);

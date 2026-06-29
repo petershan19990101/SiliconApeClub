@@ -32,7 +32,12 @@ docker compose up -d
 - `DASHSCOPE_RERANK_ENDPOINT`
 - `DASHSCOPE_RERANK_MODEL`
 
-When `DASHSCOPE_API_KEY` is empty, the service uses deterministic local hash embeddings and local rerank scoring so the MVP can run in development.
+Model settings are loaded first from the management platform table `sys_ai_model_profile`:
+
+- `purpose=rag_embedding` for query and chunk embeddings.
+- `purpose=rag_rerank` for rerank.
+
+The `DASHSCOPE_*` environment variables are backward-compatible defaults used only when the database profile is missing. When no API key is configured and fallback is enabled, the service uses deterministic local hash embeddings and local rerank scoring so the local Docker MVP can run in development. Fallback is reported in debug metadata and must not be treated as a successful real model call.
 
 ## APIs
 

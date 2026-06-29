@@ -1,5 +1,5 @@
-ARG MAVEN_BASE_IMAGE=maven:3.9.9-eclipse-temurin-8
-ARG JRE_BASE_IMAGE=eclipse-temurin:8-jre
+ARG MAVEN_BASE_IMAGE=docker.m.daocloud.io/library/maven:3.9.9-eclipse-temurin-8
+ARG JRE_BASE_IMAGE=docker.m.daocloud.io/eclipse-temurin:8-jre
 
 FROM ${JRE_BASE_IMAGE} AS runtime-prebuilt
 WORKDIR /app

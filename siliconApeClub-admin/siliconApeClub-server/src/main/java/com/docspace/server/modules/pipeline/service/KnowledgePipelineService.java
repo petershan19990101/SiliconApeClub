@@ -6,6 +6,8 @@ import com.docspace.server.common.enums.JobStatus;
 import com.docspace.server.common.exception.BusinessException;
 import com.docspace.server.common.util.JsonUtils;
 import com.docspace.server.infrastructure.cache.CacheService;
+import com.docspace.server.modules.ai.service.AiModelProfileRuntimeService;
+import com.docspace.server.modules.ai.service.AiModelProfileRuntimeService.ChatResult;
 import com.docspace.server.modules.audit.service.AuditTraceService;
 import com.docspace.server.modules.document.service.DocumentSupportService;
 import com.docspace.server.modules.knowledge.service.KnowledgeService;
@@ -16,6 +18,7 @@ import com.docspace.server.modules.wiki.service.WikiService;
 import com.docspace.server.persistence.entity.DocumentEntity;
 import com.docspace.server.persistence.mapper.DocumentMapper;
 import com.docspace.server.security.SecurityUser;
+import com.fasterxml.jackson.core.type.TypeReference;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -38,6 +41,7 @@ public class KnowledgePipelineService {
     private final AuditTraceService auditTraceService;
     private final NotificationService notificationService;
     private final CacheService cacheService;
+    private final AiModelProfileRuntimeService aiModelProfileRuntimeService;
 
     public List<Map<String, Object>> listJobs(String status, int limit) {
         int safeLimit = Math.max(1, Math.min(limit, 200));
@@ -180,8 +184,9 @@ public class KnowledgePipelineService {
         String title = request.getTitle() == null || request.getTitle().trim().isEmpty()
                 ? document.getName()
                 : request.getTitle().trim();
+        WikiDraft draft = buildWikiDraft(document, title);
         String summary = request.getSummary() == null || request.getSummary().trim().isEmpty()
-                ? summarize(document.getLatestParsedText())
+                ? draft.getSummary()
                 : request.getSummary().trim();
         Map<String, Object> metadata = new LinkedHashMap<String, Object>();
         metadata.put("sourceType", "admin_document");
@@ -190,6 +195,7 @@ public class KnowledgePipelineService {
         metadata.put("sourceFileName", document.getLatestSourceFile());
         metadata.put("parseEngine", document.getParseEngine());
         metadata.put("pipeline", "document_to_wiki");
+        metadata.put("aiModel", draft.getAiModelMetadata());
 
         List<String> tags = request.getTags() == null ? jsonUtils.readList(document.getTagsJson(), String.class) : request.getTags();
         if (tags == null || tags.isEmpty()) {
@@ -201,7 +207,7 @@ public class KnowledgePipelineService {
         wikiRequest.setTitle(title);
         wikiRequest.setPageType("document");
         wikiRequest.setSummary(summary);
-        wikiRequest.setContent(buildWikiContent(document, title));
+        wikiRequest.setContent(draft.getContent());
         wikiRequest.setMetadata(metadata);
         wikiRequest.setTags(tags);
         wikiRequest.setDepartmentId(document.getDepartmentId());
@@ -259,6 +265,58 @@ public class KnowledgePipelineService {
                 .append("\n\n");
         builder.append(document.getLatestParsedText());
         return builder.toString();
+    }
+
+    private WikiDraft buildWikiDraft(DocumentEntity document, String title) {
+        String fallbackContent = buildWikiContent(document, title);
+        String systemPrompt = "你是企业知识工程师，负责把解析后的文档转为人机共读的 LLM Wiki。"
+                + "请保留事实，不编造，不删除关键字段，输出 JSON：{\"summary\":\"...\",\"markdownContent\":\"...\"}。";
+        String userPrompt = "文档标题：" + title + "\n"
+                + "文档ID：" + document.getId() + "\n"
+                + "文档版本：" + document.getCurrentVersion() + "\n"
+                + "源文件：" + (document.getLatestSourceFile() == null ? "" : document.getLatestSourceFile()) + "\n\n"
+                + "解析正文：\n" + document.getLatestParsedText();
+        ChatResult result = aiModelProfileRuntimeService.chat(
+                AiModelProfileRuntimeService.PURPOSE_DOCUMENT_TO_WIKI,
+                systemPrompt,
+                userPrompt,
+                fallbackContent);
+        Map<String, Object> aiMetadata = new LinkedHashMap<String, Object>();
+        aiMetadata.put("purpose", AiModelProfileRuntimeService.PURPOSE_DOCUMENT_TO_WIKI);
+        aiMetadata.put("provider", result.getProvider());
+        aiMetadata.put("modelName", result.getModelName());
+        aiMetadata.put("profileCode", result.getProfileCode());
+        aiMetadata.put("realCall", result.getRealCall());
+        aiMetadata.put("fallbackUsed", result.getFallbackUsed());
+        aiMetadata.put("fallbackReason", result.getFallbackReason());
+
+        if (!Boolean.TRUE.equals(result.getRealCall())) {
+            return new WikiDraft(summarize(document.getLatestParsedText()), fallbackContent, aiMetadata);
+        }
+
+        Map<String, Object> parsed = jsonUtils.readObject(stripJsonFence(result.getContent()), new TypeReference<Map<String, Object>>() {}, new LinkedHashMap<String, Object>());
+        String llmSummary = stringValue(parsed.get("summary"));
+        String llmContent = stringValue(parsed.get("markdownContent"));
+        if (llmContent.trim().isEmpty()) {
+            llmContent = result.getContent();
+        }
+        if (llmSummary.trim().isEmpty()) {
+            llmSummary = summarize(llmContent);
+        }
+        return new WikiDraft(llmSummary, llmContent, aiMetadata);
+    }
+
+    private String stripJsonFence(String content) {
+        String safe = content == null ? "" : content.trim();
+        if (safe.startsWith("```")) {
+            safe = safe.replaceFirst("^```[a-zA-Z]*\\s*", "");
+            safe = safe.replaceFirst("\\s*```$", "");
+        }
+        return safe.trim();
+    }
+
+    private String stringValue(Object value) {
+        return value == null ? "" : String.valueOf(value);
     }
 
     private void markDocumentRagReady(DocumentEntity document, SecurityUser currentUser) {
@@ -324,5 +382,13 @@ public class KnowledgePipelineService {
             return ((Number) value).longValue();
         }
         return value == null ? null : Long.parseLong(String.valueOf(value));
+    }
+
+    @lombok.Getter
+    @lombok.RequiredArgsConstructor
+    private static class WikiDraft {
+        private final String summary;
+        private final String content;
+        private final Map<String, Object> aiModelMetadata;
     }
 }

@@ -5,6 +5,7 @@ import { AdminDepartment, AiEmployee, CustomerVisibility, EmployeeAssessmentRule
 import { useToast } from '../../contexts/ToastContext';
 import { useUser } from '../../contexts/UserContext';
 import { cx } from '../../lib/format';
+import { FormDialog } from '../ui/FormDialog';
 
 type CenterSection = 'employees' | 'customers';
 
@@ -45,7 +46,7 @@ const EMPTY_FORM: AiEmployeeForm = {
   skillsJson: '[]',
   contactRelationsJson: '[]',
   memoryPolicyJson: '{"retention":"task_scoped","writeBack":"candidate"}',
-  modelConfigJson: '{"modelProfileCode":"default_generalist"}',
+  modelConfigJson: '{"modelProfileCode":"worker_chat_llm"}',
   hrRoleCode: 'specialist',
   managerEmployeeId: '',
   employmentType: 'ai_employee',
@@ -68,6 +69,8 @@ const EMPTY_OVERVIEW: OrgHumanCenterOverview = {
   customerRoles: [],
   customerDepartmentVisibility: [],
   customerEmployeeVisibility: [],
+  customerRoleDepartmentVisibility: [],
+  customerRoleEmployeeVisibility: [],
 };
 
 export function AiEmployees({ defaultSection = 'employees' }: { defaultSection?: CenterSection }) {
@@ -78,6 +81,7 @@ export function AiEmployees({ defaultSection = 'employees' }: { defaultSection?:
   const [packages, setPackages] = React.useState<PositionPackage[]>([]);
   const [form, setForm] = React.useState<AiEmployeeForm>(EMPTY_FORM);
   const [selectedEmployee, setSelectedEmployee] = React.useState<AiEmployee | null>(null);
+  const [editorOpen, setEditorOpen] = React.useState(false);
   const [selectedDepartmentId, setSelectedDepartmentId] = React.useState('');
   const [showOffline, setShowOffline] = React.useState(false);
   const [isLoading, setIsLoading] = React.useState(false);
@@ -107,6 +111,11 @@ export function AiEmployees({ defaultSection = 'employees' }: { defaultSection?:
     () => overview.skills.filter((skill) => skill.reviewStatus === 'approved' && skill.enabled && (isTopManager(currentUser) || skill.skillLevel !== 'advanced')),
     [overview.skills, currentUser]
   );
+  const workerChatModelProfiles = React.useMemo(
+    () => overview.modelProfiles.filter((profile) => profile.enabled && (!profile.purpose || profile.purpose === 'worker_chat')),
+    [overview.modelProfiles]
+  );
+  const selectedModelProfileCode = React.useMemo(() => readModelProfileCode(form.modelConfigJson), [form.modelConfigJson]);
   const employeeCost = React.useMemo(
     () => overview.employees.filter(isActiveEmployee).reduce((sum, employee) => sum + Number(employee.costRate ?? 0), 0),
     [overview.employees]
@@ -144,6 +153,7 @@ export function AiEmployees({ defaultSection = 'employees' }: { defaultSection?:
   const startCreate = () => {
     setSelectedEmployee(null);
     setForm({ ...EMPTY_FORM, departmentId: selectedDepartmentId || overview.departments[0]?.id || '' });
+    setEditorOpen(true);
   };
 
   const startEdit = async (item: AiEmployee) => {
@@ -174,6 +184,7 @@ export function AiEmployees({ defaultSection = 'employees' }: { defaultSection?:
         skillIds: (detail.skills ?? []).map((skill) => skill.skillId),
         assessmentRules: detail.assessmentRules?.length ? detail.assessmentRules : defaultAssessmentRules(detail),
       });
+      setEditorOpen(true);
     } catch (error) {
       toast.pushToast({ title: '读取员工配置失败', description: error instanceof Error ? error.message : undefined, tone: 'error' });
     }
@@ -260,6 +271,7 @@ export function AiEmployees({ defaultSection = 'employees' }: { defaultSection?:
       toast.pushToast({ title: form.id ? '员工配置已更新' : '员工已创建', tone: 'success' });
       setSelectedEmployee(null);
       setForm({ ...EMPTY_FORM, departmentId: form.departmentId });
+      setEditorOpen(false);
       await load();
     } catch (error) {
       toast.pushToast({ title: '保存失败', description: error instanceof Error ? error.message : undefined, tone: 'error' });
@@ -276,7 +288,9 @@ export function AiEmployees({ defaultSection = 'employees' }: { defaultSection?:
       await knowledgeApi.offlineAiEmployee(item.id, '管理端离职/下线');
       toast.pushToast({ title: '员工已下线，个人记忆已清理', tone: 'success' });
       if (form.id === item.id) {
-        startCreate();
+        setSelectedEmployee(null);
+        setEditorOpen(false);
+        setForm({ ...EMPTY_FORM, departmentId: form.departmentId });
       }
       await load();
     } catch (error) {
@@ -385,7 +399,14 @@ export function AiEmployees({ defaultSection = 'employees' }: { defaultSection?:
               </div>
             </section>
 
-            <section className="grid gap-4 rounded-lg border border-slate-200 bg-white p-5">
+            <FormDialog
+              isOpen={editorOpen}
+              title={form.id ? '编辑 AI 员工' : '创建 AI 员工'}
+              description="配置员工归属、岗位知识、技能、模型 Profile、记忆策略和考核规则。"
+              widthClassName="max-w-6xl"
+              onClose={() => setEditorOpen(false)}
+            >
+              <div className="grid gap-4">
               <div className="flex items-center justify-between">
                 <h2 className="text-base font-bold text-slate-900">{form.id ? '编辑 AI 员工' : '创建 AI 员工'}</h2>
                 <button onClick={startCreate} className="inline-flex items-center gap-2 rounded-lg border border-blue-200 px-3 py-1.5 text-sm font-bold text-blue-700">
@@ -442,9 +463,22 @@ export function AiEmployees({ defaultSection = 'employees' }: { defaultSection?:
               <textarea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="一句话说明员工边界" className="min-h-20 rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none" />
               <textarea value={form.responsibilities} onChange={(event) => setForm({ ...form, responsibilities: event.target.value })} placeholder="职责说明" className="min-h-24 rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none" />
 
-              <div className="grid gap-3 lg:grid-cols-2">
+              <div className="grid gap-3 lg:grid-cols-3">
                 <JsonBox label="记忆策略 JSON" value={form.memoryPolicyJson} onChange={(value) => setForm({ ...form, memoryPolicyJson: value })} />
-                <JsonBox label="模型配置 JSON" value={form.modelConfigJson} onChange={(value) => setForm({ ...form, modelConfigJson: value })} />
+                <label className="grid gap-1 text-xs font-bold text-slate-600">
+                  模型 Profile
+                  <select
+                    value={selectedModelProfileCode}
+                    onChange={(event) => setForm({ ...form, modelConfigJson: writeModelProfileCode(form.modelConfigJson, event.target.value) })}
+                    className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-700 outline-none"
+                  >
+                    <option value="">请选择模型 Profile</option>
+                    {workerChatModelProfiles.map((profile) => (
+                      <option key={profile.code} value={profile.code}>{profile.name} · {profile.modelName}</option>
+                    ))}
+                  </select>
+                </label>
+                <JsonBox label="模型配置 JSON（高级）" value={form.modelConfigJson} onChange={(value) => setForm({ ...form, modelConfigJson: value })} />
               </div>
 
               <div className="rounded-lg border border-slate-200 p-4">
@@ -526,7 +560,8 @@ export function AiEmployees({ defaultSection = 'employees' }: { defaultSection?:
                   </div>
                 </div>
               ) : null}
-            </section>
+              </div>
+            </FormDialog>
 
           </div>
         </div>
@@ -657,16 +692,27 @@ function CustomerCenter({
 }) {
   const toast = useToast();
   const [selectedCustomerId, setSelectedCustomerId] = React.useState('');
+  const [selectedRoleId, setSelectedRoleId] = React.useState('');
   const [departmentIds, setDepartmentIds] = React.useState<Set<string>>(new Set());
+  const [roleDepartmentIds, setRoleDepartmentIds] = React.useState<Set<string>>(new Set());
   const [employeeRules, setEmployeeRules] = React.useState<EmployeeVisibilityDraft>({});
+  const [roleEmployeeRules, setRoleEmployeeRules] = React.useState<EmployeeVisibilityDraft>({});
   const [isSaving, setIsSaving] = React.useState(false);
+  const [isSavingRole, setIsSavingRole] = React.useState(false);
   const selectedCustomer = overview.customers.find((customer) => customer.id === selectedCustomerId);
+  const selectedRole = overview.customerRoles.find((role) => role.id === selectedRoleId);
 
   React.useEffect(() => {
     if (!selectedCustomerId && overview.customers[0]) {
       setSelectedCustomerId(overview.customers[0].id);
     }
   }, [overview.customers, selectedCustomerId]);
+
+  React.useEffect(() => {
+    if (!selectedRoleId && overview.customerRoles[0]) {
+      setSelectedRoleId(overview.customerRoles[0].id);
+    }
+  }, [overview.customerRoles, selectedRoleId]);
 
   React.useEffect(() => {
     if (!selectedCustomerId) {
@@ -689,6 +735,27 @@ function CustomerCenter({
     setEmployeeRules(nextRules);
   }, [overview, selectedCustomerId]);
 
+  React.useEffect(() => {
+    if (!selectedRoleId) {
+      return;
+    }
+    setRoleDepartmentIds(new Set(
+      overview.customerRoleDepartmentVisibility
+        .filter((item) => item.roleId === selectedRoleId && item.departmentId)
+        .map((item) => item.departmentId as string)
+    ));
+    const nextRules: EmployeeVisibilityDraft = {};
+    overview.employees.forEach((employee) => {
+      const match = overview.customerRoleEmployeeVisibility.find((item) => item.roleId === selectedRoleId && item.aiEmployeeId === employee.id);
+      nextRules[employee.id] = {
+        visible: Boolean(match),
+        canConsult: Boolean(match?.canConsult),
+        canAssign: Boolean(match?.canAssign),
+      };
+    });
+    setRoleEmployeeRules(nextRules);
+  }, [overview, selectedRoleId]);
+
   const toggleDepartment = (departmentId: string) => {
     setDepartmentIds((current) => {
       const next = new Set(current);
@@ -701,8 +768,35 @@ function CustomerCenter({
     });
   };
 
+  const toggleRoleDepartment = (departmentId: string) => {
+    setRoleDepartmentIds((current) => {
+      const next = new Set(current);
+      if (next.has(departmentId)) {
+        next.delete(departmentId);
+      } else {
+        next.add(departmentId);
+      }
+      return next;
+    });
+  };
+
   const updateEmployeeRule = (employeeId: string, patch: Partial<EmployeeVisibilityDraft[string]>) => {
     setEmployeeRules((current) => {
+      const existing = current[employeeId] ?? { visible: false, canConsult: false, canAssign: false };
+      const next = { ...existing, ...patch };
+      if (!next.visible) {
+        next.canConsult = false;
+        next.canAssign = false;
+      }
+      if ((patch.canConsult || patch.canAssign) && !next.visible) {
+        next.visible = true;
+      }
+      return { ...current, [employeeId]: next };
+    });
+  };
+
+  const updateRoleEmployeeRule = (employeeId: string, patch: Partial<EmployeeVisibilityDraft[string]>) => {
+    setRoleEmployeeRules((current) => {
       const existing = current[employeeId] ?? { visible: false, canConsult: false, canAssign: false };
       const next = { ...existing, ...patch };
       if (!next.visible) {
@@ -738,12 +832,102 @@ function CustomerCenter({
     }
   };
 
+  const saveRoleVisibility = async () => {
+    if (!selectedRoleId) {
+      toast.pushToast({ title: '请选择客户角色', tone: 'error' });
+      return;
+    }
+    setIsSavingRole(true);
+    try {
+      const nextOverview = await knowledgeApi.updateCustomerRoleVisibility(selectedRoleId, {
+        departmentIds: Array.from(roleDepartmentIds),
+        employees: Object.entries(roleEmployeeRules)
+          .filter(([, rule]) => rule.visible)
+          .map(([aiEmployeeId, rule]) => ({ aiEmployeeId, canConsult: rule.canConsult, canAssign: rule.canAssign })),
+      });
+      onVisibilitySaved(nextOverview);
+      toast.pushToast({ title: '客户角色默认可见性已保存', tone: 'success' });
+    } catch (error) {
+      toast.pushToast({ title: '客户角色默认可见性保存失败', description: error instanceof Error ? error.message : undefined, tone: 'error' });
+    } finally {
+      setIsSavingRole(false);
+    }
+  };
+
   return (
     <div className="grid gap-6 xl:grid-cols-[1fr_1fr]">
       <section className="rounded-lg border border-slate-200 bg-white p-5 xl:col-span-2">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-base font-bold text-slate-900">客户可见性配置</h2>
+            <h2 className="text-base font-bold text-slate-900">客户角色默认可见性</h2>
+            <p className="mt-1 text-xs text-slate-500">{selectedRole ? `${selectedRole.name} · ${selectedRole.code}` : '请选择客户角色'}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <select value={selectedRoleId} onChange={(event) => setSelectedRoleId(event.target.value)} className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none">
+              {overview.customerRoles.map((role) => (
+                <option key={role.id} value={role.id}>{role.name}</option>
+              ))}
+            </select>
+            <button onClick={() => void saveRoleVisibility()} disabled={isSavingRole || !selectedRoleId} className="inline-flex items-center gap-2 rounded-lg bg-blue-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+              <Save size={16} />
+              {isSavingRole ? '保存中...' : '保存默认规则'}
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-5 xl:grid-cols-[360px_1fr]">
+          <div>
+            <p className="mb-2 text-sm font-bold text-slate-900">默认可见部门</p>
+            <div className="grid gap-2">
+              {overview.departments.map((department) => (
+                <label key={department.id} className="flex items-start gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                  <input type="checkbox" checked={roleDepartmentIds.has(department.id)} onChange={() => toggleRoleDepartment(department.id)} className="mt-1" />
+                  <span>
+                    <span className="block font-bold text-slate-800">{department.name}</span>
+                    <span className="text-xs text-slate-500">{department.code} · {department.unitType || 'department'}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <p className="mb-2 text-sm font-bold text-slate-900">默认可见员工</p>
+            <div className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+              {overview.employees.map((employee) => {
+                const rule = roleEmployeeRules[employee.id] ?? { visible: false, canConsult: false, canAssign: false };
+                return (
+                  <div key={employee.id} className="grid gap-3 p-3 md:grid-cols-[1fr_auto]">
+                    <div>
+                      <p className="text-sm font-bold text-slate-900">{employee.name}</p>
+                      <p className="mt-1 text-xs text-slate-500">{employee.departmentName || '未配置部门'} · {employee.roleTitle || employee.positionCode || '未配置岗位'}</p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3 text-xs font-bold text-slate-600">
+                      <label className="inline-flex items-center gap-1">
+                        <input type="checkbox" checked={rule.visible} onChange={(event) => updateRoleEmployeeRule(employee.id, { visible: event.target.checked })} />
+                        可见
+                      </label>
+                      <label className="inline-flex items-center gap-1">
+                        <input type="checkbox" checked={rule.canConsult} onChange={(event) => updateRoleEmployeeRule(employee.id, { canConsult: event.target.checked, visible: event.target.checked || rule.visible })} />
+                        咨询
+                      </label>
+                      <label className="inline-flex items-center gap-1">
+                        <input type="checkbox" checked={rule.canAssign} onChange={(event) => updateRoleEmployeeRule(employee.id, { canAssign: event.target.checked, visible: event.target.checked || rule.visible })} />
+                        派活
+                      </label>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 xl:col-span-2">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-bold text-slate-900">客户会员附加可见性</h2>
             <p className="mt-1 text-xs text-slate-500">{selectedCustomer ? `${selectedCustomer.name} · ${selectedCustomer.principalCode || '未绑定登录主体'}` : '请选择客户'}</p>
           </div>
           <div className="flex items-center gap-2">
@@ -839,6 +1023,8 @@ function CustomerCenter({
         </div>
       </section>
 
+      <VisibilityPanel title="角色默认可见部门" items={overview.customerRoleDepartmentVisibility} mode="department" />
+      <VisibilityPanel title="角色默认可见员工" items={overview.customerRoleEmployeeVisibility} mode="employee" />
       <VisibilityPanel title="客户可见部门" items={overview.customerDepartmentVisibility} mode="department" />
       <VisibilityPanel title="客户可见员工" items={overview.customerEmployeeVisibility} mode="employee" />
     </div>
@@ -854,7 +1040,7 @@ function VisibilityPanel({ title, items, mode }: { title: string; items: Custome
           <div key={item.id} className="flex items-center justify-between gap-4 py-3">
             <div>
               <p className="text-sm font-bold text-slate-900">{mode === 'department' ? item.departmentName : item.employeeName}</p>
-              <p className="mt-1 text-xs text-slate-500">{item.customerName} · {item.visibilityType}{mode === 'employee' && item.roleTitle ? ` · ${item.roleTitle}` : ''}</p>
+              <p className="mt-1 text-xs text-slate-500">{item.customerName || item.roleName || item.roleCode} · {item.visibilityType}{mode === 'employee' && item.roleTitle ? ` · ${item.roleTitle}` : ''}</p>
             </div>
             {mode === 'employee' ? (
               <div className="flex gap-2 text-[11px] font-bold">
@@ -951,6 +1137,26 @@ function prettyJson(value: string | undefined, fallback: string) {
   } catch {
     return value;
   }
+}
+
+function readModelProfileCode(value: string) {
+  try {
+    const parsed = JSON.parse(value || '{}') as { modelProfileCode?: string };
+    return parsed.modelProfileCode ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function writeModelProfileCode(value: string, modelProfileCode: string) {
+  let parsed: Record<string, unknown> = {};
+  try {
+    parsed = JSON.parse(value || '{}') as Record<string, unknown>;
+  } catch {
+    parsed = {};
+  }
+  parsed.modelProfileCode = modelProfileCode;
+  return JSON.stringify(parsed, null, 2);
 }
 
 function tabClass(active: boolean) {

@@ -1,9 +1,13 @@
 package com.docspace.server.modules.admin.controller;
 
 import com.docspace.server.common.api.ApiResponse;
+import com.docspace.server.modules.admin.dto.AiModelProfileDto;
+import com.docspace.server.modules.admin.dto.AiModelProfileTestResultDto;
+import com.docspace.server.modules.admin.dto.AiModelProfileUpsertRequest;
 import com.docspace.server.modules.admin.dto.ParseEngineBindingAdminDto;
 import com.docspace.server.modules.admin.dto.ParseEngineBindingUpsertRequest;
 import com.docspace.server.modules.admin.dto.RegisteredParseEngineDto;
+import com.docspace.server.modules.admin.service.AiModelProfileAdminService;
 import com.docspace.server.modules.admin.service.ParseEngineBindingAdminService;
 import com.docspace.server.modules.admin.service.RbacPermissionService;
 import com.docspace.server.security.SecurityUser;
@@ -27,6 +31,7 @@ public class SettingsAdminController {
 
     private final RbacPermissionService rbacPermissionService;
     private final ParseEngineBindingAdminService parseEngineBindingAdminService;
+    private final AiModelProfileAdminService aiModelProfileAdminService;
 
     @GetMapping("/parse-engines/catalog")
     public ApiResponse<List<RegisteredParseEngineDto>> parseEngineCatalog(@AuthenticationPrincipal SecurityUser currentUser) {
@@ -61,5 +66,26 @@ public class SettingsAdminController {
         rbacPermissionService.ensurePermission(currentUser, "settings.parse_config.delete");
         parseEngineBindingAdminService.delete(id, currentUser);
         return ApiResponse.success("删除成功", null);
+    }
+
+    @GetMapping("/ai-model-profiles")
+    public ApiResponse<List<AiModelProfileDto>> aiModelProfiles(@AuthenticationPrincipal SecurityUser currentUser) {
+        rbacPermissionService.ensurePermission(currentUser, "settings.ai_model.view");
+        return ApiResponse.success(aiModelProfileAdminService.listProfiles());
+    }
+
+    @PutMapping("/ai-model-profiles/{id}")
+    public ApiResponse<AiModelProfileDto> updateAiModelProfile(@PathVariable Long id,
+                                                               @Valid @RequestBody AiModelProfileUpsertRequest request,
+                                                               @AuthenticationPrincipal SecurityUser currentUser) {
+        rbacPermissionService.ensurePermission(currentUser, "settings.ai_model.edit");
+        return ApiResponse.success(aiModelProfileAdminService.update(id, request, currentUser));
+    }
+
+    @PostMapping("/ai-model-profiles/{id}/test")
+    public ApiResponse<AiModelProfileTestResultDto> testAiModelProfile(@PathVariable Long id,
+                                                                       @AuthenticationPrincipal SecurityUser currentUser) {
+        rbacPermissionService.ensurePermission(currentUser, "settings.ai_model.test");
+        return ApiResponse.success(aiModelProfileAdminService.test(id));
     }
 }

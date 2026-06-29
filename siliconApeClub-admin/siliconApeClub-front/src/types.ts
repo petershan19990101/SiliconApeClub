@@ -334,6 +334,37 @@ export interface DocumentListResult {
   limit: number;
 }
 
+export interface AiModelProfile {
+  id: string;
+  profileCode: string;
+  profileName: string;
+  provider: string;
+  purpose: 'document_to_wiki' | 'worker_chat' | 'rag_embedding' | 'rag_rerank' | string;
+  endpoint: string;
+  apiKeyConfigured: boolean;
+  apiKeyMasked?: string;
+  modelName: string;
+  dimensions?: number;
+  timeoutSeconds: number;
+  enabled: boolean;
+  defaultProfile: boolean;
+  fallbackEnabled: boolean;
+  configJson?: string;
+  updatedAt?: string;
+}
+
+export interface AiModelProfileTestResult {
+  status: 'ok' | 'failed' | 'fallback' | 'not_configured' | string;
+  provider: string;
+  purpose: string;
+  modelName: string;
+  realCall: boolean;
+  fallbackUsed: boolean;
+  message: string;
+  embeddingDimensions?: number;
+  sample?: string;
+}
+
 export interface FolderListResult {
   folders: Folder[];
 }
@@ -361,6 +392,7 @@ export type View =
   | 'rag_debug'
   | 'ai_employees'
   | 'skill_repository'
+  | 'quick_capabilities'
   | 'customer_members'
   | 'settings'
   | 'help';
@@ -569,6 +601,44 @@ export interface SkillRepositoryItem {
   bindings?: Array<Record<string, unknown>>;
 }
 
+export interface QuickCapabilityGroup {
+  id: string;
+  groupCode: string;
+  groupName: string;
+  description?: string;
+  groupSort: number;
+  visibleToExternal: boolean;
+  visibleToInternal: boolean;
+  enabled: boolean;
+}
+
+export interface QuickCapability {
+  id: string;
+  groupId: string;
+  groupCode?: string;
+  groupName?: string;
+  groupSort?: number;
+  capabilityCode: string;
+  capabilityName: string;
+  description?: string;
+  transactionServiceCode: string;
+  actionCode: string;
+  formTitle?: string;
+  submitLabel?: string;
+  inputSchemaJson: string;
+  displayHtml?: string;
+  keywordsJson: string;
+  visibleToExternal: boolean;
+  visibleToInternal: boolean;
+  enabled: boolean;
+  sortOrder: number;
+}
+
+export interface QuickCapabilityOverview {
+  groups: QuickCapabilityGroup[];
+  capabilities: QuickCapability[];
+}
+
 export interface HrRole {
   id: string;
   code: string;
@@ -605,6 +675,9 @@ export interface CustomerVisibility {
   id: string;
   customerId: string;
   customerName?: string;
+  roleId?: string;
+  roleName?: string;
+  roleCode?: string;
   departmentId?: string;
   departmentName?: string;
   aiEmployeeId?: string;
@@ -626,6 +699,8 @@ export interface OrgHumanCenterOverview {
   customerRoles: HrRole[];
   customerDepartmentVisibility: CustomerVisibility[];
   customerEmployeeVisibility: CustomerVisibility[];
+  customerRoleDepartmentVisibility: CustomerVisibility[];
+  customerRoleEmployeeVisibility: CustomerVisibility[];
 }
 
 export interface IndexedChunk {

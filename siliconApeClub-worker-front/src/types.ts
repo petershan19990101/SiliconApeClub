@@ -59,9 +59,34 @@ export interface WorkerMessage {
   createdAt: string;
 }
 
+export interface Capability {
+  id: string;
+  code: string;
+  name: string;
+  skillType: string;
+  description?: string;
+  groupCode?: string;
+  groupName?: string;
+  groupSort?: number;
+  sortOrder?: number;
+  transactionServiceCode?: string;
+  formTitle: string;
+  submitLabel: string;
+  fields: FormField[];
+  displayHtml?: string;
+  defaultVisible?: boolean;
+  deterministic?: boolean;
+  externalVisible?: boolean;
+  internalOnly?: boolean;
+  actionCode?: string;
+  keywords?: string[];
+}
+
 export type MessageBlock =
   | { type: "markdown"; content?: string; title?: string; data?: Record<string, unknown> }
   | { type: "html"; content?: string; title?: string; data?: Record<string, unknown> }
+  | { type: "code"; content?: string; title?: string; data?: Record<string, unknown> }
+  | { type: "image"; content?: string; title?: string; data?: Record<string, unknown> }
   | { type: "form"; content?: string; title?: string; data: FormBlockData }
   | { type: "artifact"; content?: string; title?: string; data: Record<string, unknown> }
   | { type: "task_status"; content?: string; title?: string; data: Record<string, unknown> }
@@ -70,17 +95,34 @@ export type MessageBlock =
   | { type: "handoff"; content?: string; title?: string; data: Record<string, unknown> };
 
 export interface FormBlockData {
+  capabilityCode?: string;
+  capabilityName?: string;
+  transactionServiceCode?: string;
+  actionCode?: string;
+  htmlContent?: string;
+  description?: string;
+  deterministic?: boolean;
+  submitted?: boolean;
+  readOnly?: boolean;
+  values?: Record<string, string>;
   submitLabel?: string;
   fields: FormField[];
+}
+
+export interface FormOption {
+  label: string;
+  value: string;
 }
 
 export interface FormField {
   name: string;
   label: string;
-  type: "text" | "textarea" | "select";
+  type: "text" | "textarea" | "select" | "number" | "date" | "email" | "tel";
   required?: boolean;
   defaultValue?: string;
-  options?: string[];
+  placeholder?: string;
+  helpText?: string;
+  options?: Array<string | FormOption>;
 }
 
 export interface WorkerTask {
